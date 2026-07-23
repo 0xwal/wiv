@@ -73,13 +73,26 @@ struct pool_buffer *create_buffer(struct wl_shm *shm, struct pool_buffer *buf,
 	size_t size = stride * height;
 
 	int fd = allocate_shm_file(size);
-	assert(fd != -1);
+	if (fd < 0)
+		return NULL;
+
 	void *data = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	if (data == MAP_FAILED) {
+		close(fd);
+		return NULL;
+	}
+
 	struct wl_shm_pool *pool = wl_shm_create_pool(shm, fd, size);
+	close(fd);
+
 	buf->buffer = wl_shm_pool_create_buffer(pool, 0,
 			width, height, stride, format);
 	wl_shm_pool_destroy(pool);
-	close(fd);
+
+	if (!buf->buffer) {
+		munmap(data, size);
+		return NULL;
+	}
 
 	buf->size = size;
 	buf->width = width;
@@ -89,6 +102,11 @@ struct pool_buffer *create_buffer(struct wl_shm *shm, struct pool_buffer *buf,
 			CAIRO_FORMAT_ARGB32, width, height, stride);
 	buf->cairo = cairo_create(buf->surface);
 	buf->pango = pango_cairo_create_context(buf->cairo);
+
+	if (!buf->surface || !buf->cairo || !buf->pango) {
+		destroy_buffer(buf);
+		return NULL;
+	}
 
 	wl_buffer_add_listener(buf->buffer, &buffer_listener, buf);
 	return buf;

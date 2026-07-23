@@ -279,9 +279,7 @@ static void render_frame(struct wsk_state *state) {
 		// Replay recording into shm and send it off
 		if (!create_buffer(state->shm, &buffer, state->width * scale, state->height * scale,
 				   WL_SHM_FORMAT_ARGB8888)) {
-			cairo_surface_destroy(recorder);
-			cairo_destroy(cairo);
-			return;
+			goto cleanup;
 		}
 		cairo_t *shm = buffer.cairo;
 
@@ -299,6 +297,10 @@ static void render_frame(struct wsk_state *state) {
 		wl_surface_commit(state->surface);
 		destroy_buffer(&buffer);
 	}
+
+cleanup:
+	cairo_destroy(cairo);
+	cairo_surface_destroy(recorder);
 }
 
 bool surface_is_configured(struct wsk_state *state) {
@@ -854,6 +856,7 @@ static void handle_libinput_event(struct wsk_state *state, struct libinput_event
 				} else if (strcmp(keypress->name, "Shift_R") == 0) {
 					state->shift_r_hold = 0;
 				}
+				free(keypress);
 			}
 			break;
 		case LIBINPUT_KEY_STATE_PRESSED:
@@ -880,6 +883,8 @@ static void handle_libinput_event(struct wsk_state *state, struct libinput_event
 				} else if (strcmp(keypress->name, "Shift_R") == 0) {
 					state->shift_r_hold = 1;
 				}
+				free(keypress);
+				break;
 			} else {
 				// Pattern masking — intercept before display
 				int mask_result = mask_check(&state->mask, keypress);
@@ -1325,6 +1330,8 @@ int main(int argc, char *argv[]) {
 			(now.tv_sec - state.last_key.tv_sec) * 1000000000L + (now.tv_nsec - state.last_key.tv_nsec);
 		if (state.last_was_release && elapsed_ns > (long) state.timeout * 1000000L) {
 			clear_full_keylink(key, &state);
+			for (int i = 0; i < state.mask.buffer_len; i++)
+				free(state.mask.buffer[i]);
 			mask_reset(&state.mask);
 		} else {
 			//caulate whether output len is reach len max limit
