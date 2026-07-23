@@ -72,6 +72,7 @@ struct wsk_state {
 
 	bool run;
 	bool inspect;
+	bool last_was_release;
 	//state of function key
 	int ctrl_l_hold;
 	int ctrl_r_hold;
@@ -235,16 +236,31 @@ static void render_frame(struct wsk_state *state) {
 			|| state->width == 0) {
 		// Reconfigure surface
 		if (width == 0 || height == 0) {
-//			wl_surface_attach(state->surface, NULL, 0, 0);
-			;
+			// Clear: paint recording (background only) to clear keys
+			if (state->width && state->height
+					&& create_buffer(state->shm, &buffer, state->width * scale,
+							state->height * scale, WL_SHM_FORMAT_ARGB8888)) {
+				cairo_t *shm = buffer.cairo;
+				cairo_save(shm);
+				cairo_set_operator(shm, CAIRO_OPERATOR_CLEAR);
+				cairo_paint(shm);
+				cairo_restore(shm);
+				cairo_set_source_surface(shm, recorder, 0.0, 0.0);
+				cairo_paint(shm);
+				wl_surface_set_buffer_scale(state->surface, scale);
+				wl_surface_attach(state->surface, buffer.buffer, 0, 0);
+				wl_surface_damage_buffer(state->surface, 0, 0,
+						state->width * scale, state->height * scale);
+				wl_surface_commit(state->surface);
+				destroy_buffer(&buffer);
+			}
 		} else {
 			zwlr_layer_surface_v1_set_size(
 					state->layer_surface, width / scale, height / scale);
+			// TODO: this could infinite loop if the compositor assigns us a
+			// different height than what we asked for
+			wl_surface_commit(state->surface);
 		}
-
-		// TODO: this could infinite loop if the compositor assigns us a
-		// different height than what we asked for
-		wl_surface_commit(state->surface);
 	} else if (height > 0) {
 		// Replay recording into shm and send it off
 		if (!create_buffer(state->shm, &buffer, state->width * scale,
@@ -267,7 +283,7 @@ static void render_frame(struct wsk_state *state) {
 		wl_surface_attach(state->surface,
 				buffer.buffer, 0, 0);
 		wl_surface_damage_buffer(state->surface, 0, 0,
-				state->width, state->height);
+				state->width * scale, state->height * scale);
 		wl_surface_commit(state->surface);
 		destroy_buffer(&buffer);
 	}
@@ -786,6 +802,7 @@ static void handle_libinput_event(struct wsk_state *state,
 		break;
 	}
 
+	state->last_was_release = (key_state == LIBINPUT_KEY_STATE_RELEASED);
 	clock_gettime(CLOCK_MONOTONIC, &state->last_key);
 	set_dirty(state);
 }
@@ -844,7 +861,7 @@ int main(int argc, char *argv[]) {
 
 	int ret = 0;
 
-	unsigned int anchor = 0;
+	unsigned int anchor = ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
 	int margin = 32;
 	state.background = 0x00000000;
 	state.specialfg = 0xAAAAAAA0;
@@ -862,6 +879,7 @@ int main(int argc, char *argv[]) {
 	state.shift_r_hold = 0;
 	state.combination_keye_repetition = 1;
 	state.inspect = false;
+	state.last_was_release = true;
 
 	int c;
 	while ((c = getopt(argc, argv, "hib:f:s:F:t:a:m:o:l:")) != -1) {
@@ -1024,13 +1042,9 @@ int main(int argc, char *argv[]) {
 		int all_key_len = 0;
 
 		clock_gettime(CLOCK_MONOTONIC, &now);
-		// when reach timeout limit,clear full keylink
-		if (state.timeout < 1000 && now.tv_sec > state.last_key.tv_sec + 1) {
-			clear_full_keylink(key,&state);
-		} else if (state.timeout < 1000 && now.tv_sec == state.last_key.tv_sec &&
-				now.tv_nsec > state.last_key.tv_nsec + (state.timeout * 1000000) ){
-			clear_full_keylink(key,&state);			
-		} else if (state.timeout >= 1000 && now.tv_sec > state.last_key.tv_sec + (state.timeout/1000)) {
+		long elapsed_ns = (now.tv_sec - state.last_key.tv_sec) * 1000000000L
+		                + (now.tv_nsec - state.last_key.tv_nsec);
+		if (state.last_was_release && elapsed_ns > (long)state.timeout * 1000000L) {
 			clear_full_keylink(key,&state);
 		} else {
 			//caulate whether output len is reach len max limit
