@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>
@@ -23,6 +24,20 @@
 #include "xdg-output-unstable-v1-client-protocol.h"
 
 static struct pool_buffer buffer;
+
+#define MASK_PATTERNS_MAX 32
+#define MASK_BUFFER_MAX 256
+#define MASK_THRESHOLD 3
+
+struct mask_state {
+    char patterns[MASK_PATTERNS_MAX][256];
+    int num_patterns;
+    int pos[MASK_PATTERNS_MAX];
+    int matched[MASK_PATTERNS_MAX];
+    bool active[MASK_PATTERNS_MAX];
+    struct wsk_keypress *buffer[MASK_BUFFER_MAX];
+    int buffer_len;
+};
 
 struct wsk_keypress {
 	xkb_keysym_t sym;
@@ -87,6 +102,7 @@ struct wsk_state {
 	char prev_combination_keye[128];
 
 	int combination_keye_repetition;
+	struct mask_state mask;
 };
 
 /* void logtofile(const char *fmt, ...) { */
@@ -619,6 +635,138 @@ static void attach_repeat_flag(struct wsk_state *state,int num,int num_len) {
 
 }
 
+static int pattern_char_matches(char pchar, struct wsk_keypress *kp) {
+    if (pchar == '?')
+        return kp->utf8[0] != '\0' ? 1 : 0;
+    if (kp->utf8[0] != '\0')
+        return tolower((unsigned char)kp->utf8[0]) == tolower((unsigned char)pchar) ? 1 : 0;
+    return tolower((unsigned char)kp->name[0]) == tolower((unsigned char)pchar) ? 1 : 0;
+}
+
+static void mask_reset(struct mask_state *m) {
+    for (int i = 0; i < m->num_patterns; i++) {
+        m->pos[i] = 0;
+        m->matched[i] = 0;
+        m->active[i] = false;
+    }
+    m->buffer_len = 0;
+}
+
+static int mask_check(struct mask_state *m, struct wsk_keypress *kp) {
+    if (m->num_patterns == 0) return 0;
+
+    bool any_active = false;
+    bool any_full = false;
+
+    for (int i = 0; i < m->num_patterns; i++) {
+        int plen = (int)strlen(m->patterns[i]);
+        if (plen == 0) continue;
+
+        int ppos = m->active[i] ? m->pos[i] : 0;
+
+        if (ppos >= plen) continue;
+
+        if (pattern_char_matches(m->patterns[i][ppos], kp)) {
+            m->active[i] = true;
+            m->pos[i] = ppos + 1;
+            m->matched[i]++;
+            any_active = true;
+            if (m->pos[i] >= plen) {
+                any_full = true;
+            }
+        } else {
+            m->active[i] = false;
+        }
+    }
+
+    if (any_full) return 2; // DISCARD
+
+    if (!any_active) {
+        int max_m = 0;
+        for (int i = 0; i < m->num_patterns; i++)
+            if (m->matched[i] > max_m) max_m = m->matched[i];
+        if (max_m >= MASK_THRESHOLD) return 2; // DISCARD
+        if (max_m > 0) return 3; // FLUSH
+        return 0; // PASS
+    }
+
+    return 1; // BUFFER
+}
+
+static void mask_buffer_add(struct mask_state *m, struct wsk_keypress *kp) {
+    if (m->buffer_len >= MASK_BUFFER_MAX) return;
+    m->buffer[m->buffer_len++] = kp;
+}
+
+static int append_key_with_modifiers(struct wsk_state *state, struct wsk_keypress *kp) {
+    struct wsk_keypress **link = &state->keys;
+    while (*link) link = &(*link)->next;
+    int n = 0;
+
+    if (state->shift_l_hold) {
+        struct wsk_keypress *tk = calloc(1, sizeof(struct wsk_keypress));
+        strcpy(tk->name, "Shift_L");
+        *link = tk; link = &(*link)->next; n++;
+    }
+    if (state->shift_r_hold) {
+        struct wsk_keypress *tk = calloc(1, sizeof(struct wsk_keypress));
+        strcpy(tk->name, "Shift_R");
+        *link = tk; link = &(*link)->next; n++;
+    }
+    if (state->ctrl_l_hold) {
+        struct wsk_keypress *tk = calloc(1, sizeof(struct wsk_keypress));
+        strcpy(tk->name, "Control_L");
+        *link = tk; link = &(*link)->next; n++;
+    }
+    if (state->ctrl_r_hold) {
+        struct wsk_keypress *tk = calloc(1, sizeof(struct wsk_keypress));
+        strcpy(tk->name, "Control_R");
+        *link = tk; link = &(*link)->next; n++;
+    }
+    if (state->super_l_hold) {
+        struct wsk_keypress *tk = calloc(1, sizeof(struct wsk_keypress));
+        strcpy(tk->name, "Super_L");
+        *link = tk; link = &(*link)->next; n++;
+    }
+    if (state->supre_r_hold) {
+        struct wsk_keypress *tk = calloc(1, sizeof(struct wsk_keypress));
+        strcpy(tk->name, "Super_R");
+        *link = tk; link = &(*link)->next; n++;
+    }
+    if (state->alt_l_hold) {
+        struct wsk_keypress *tk = calloc(1, sizeof(struct wsk_keypress));
+        strcpy(tk->name, "Alt_L");
+        *link = tk; link = &(*link)->next; n++;
+    }
+    if (state->alt_r_hold) {
+        struct wsk_keypress *tk = calloc(1, sizeof(struct wsk_keypress));
+        strcpy(tk->name, "Alt_R");
+        *link = tk; link = &(*link)->next; n++;
+    }
+
+    *link = kp;
+    kp->next = NULL;
+    n++;
+    return n;
+}
+
+static void mask_flush(struct wsk_state *state, struct wsk_keypress *current_kp) {
+    for (int i = 0; i < state->mask.buffer_len; i++)
+        append_key_with_modifiers(state, state->mask.buffer[i]);
+    append_key_with_modifiers(state, current_kp);
+    // Reset repeat detection
+    memset(state->prev_combination_keye, 0, sizeof(state->prev_combination_keye));
+    state->combination_keye_repetition = 1;
+    mask_reset(&state->mask);
+}
+
+static void mask_discard(struct wsk_state *state, struct wsk_keypress *current_kp) {
+    for (int i = 0; i < state->mask.buffer_len; i++)
+        free(state->mask.buffer[i]);
+    free(current_kp);
+    mask_reset(&state->mask);
+}
+
 //listen key keydown and record to keylink
 static void handle_libinput_event(struct wsk_state *state,
 		struct libinput_event *event) {
@@ -655,9 +803,6 @@ static void handle_libinput_event(struct wsk_state *state,
 		keypress->utf8[0] = '\0';
 	}
 
-	// clear current_combination_key
-	memset(state->current_combination_key, 0, sizeof(state->current_combination_key));
-	int special_key_num = 0;
 
 	switch (key_state) {
 	case LIBINPUT_KEY_STATE_RELEASED:
@@ -703,13 +848,71 @@ static void handle_libinput_event(struct wsk_state *state,
 				state->shift_r_hold = 1;
 			}
 		} else {
+			// Pattern masking — intercept before display
+			int mask_result = mask_check(&state->mask, keypress);
+
+			// Backspace while pattern buffer active — pop last
+			if (state->mask.buffer_len > 0 && (strcmp(keypress->name, "BackSpace") == 0 || strcmp(keypress->name, "Delete") == 0)) {
+				struct wsk_keypress *last = state->mask.buffer[state->mask.buffer_len - 1];
+				free(last);
+				state->mask.buffer_len--;
+				for (int p = 0; p < state->mask.num_patterns; p++) {
+					if (state->mask.active[p] && state->mask.pos[p] > 0) {
+						state->mask.pos[p]--;
+						if (state->mask.matched[p] > 0) state->mask.matched[p]--;
+					}
+				}
+				free(keypress);
+				state->last_was_release = (key_state == LIBINPUT_KEY_STATE_RELEASED);
+				clock_gettime(CLOCK_MONOTONIC, &state->last_key);
+				return;
+			}
+
+			// Key repeat while pattern buffer active — flush/discard
+			if (state->combination_keye_repetition > 1 && state->mask.buffer_len > 0) {
+				int max_m = 0;
+				for (int i = 0; i < state->mask.num_patterns; i++)
+					if (state->mask.matched[i] > max_m) max_m = state->mask.matched[i];
+				if (max_m >= MASK_THRESHOLD) {
+					for (int i = 0; i < state->mask.buffer_len; i++) free(state->mask.buffer[i]);
+				} else {
+					for (int i = 0; i < state->mask.buffer_len; i++)
+						append_key_with_modifiers(state, state->mask.buffer[i]);
+				}
+				mask_reset(&state->mask);
+				// Fall through to normal repeat handling
+			}
+
+			if (mask_result == 1) {
+				mask_buffer_add(&state->mask, keypress);
+				state->last_was_release = (key_state == LIBINPUT_KEY_STATE_RELEASED);
+				clock_gettime(CLOCK_MONOTONIC, &state->last_key);
+				return;
+			}
+			if (mask_result == 2) {
+				mask_discard(state, keypress);
+				state->last_was_release = (key_state == LIBINPUT_KEY_STATE_RELEASED);
+				clock_gettime(CLOCK_MONOTONIC, &state->last_key);
+				return;
+			}
+			if (mask_result == 3) {
+				// Build current_combination_key from the keys we're about to flush
+				memset(state->current_combination_key, 0, sizeof(state->current_combination_key));
+				mask_flush(state, keypress);
+				set_dirty(state);
+				state->last_was_release = (key_state == LIBINPUT_KEY_STATE_RELEASED);
+				clock_gettime(CLOCK_MONOTONIC, &state->last_key);
+				return;
+			}
+
 			struct wsk_keypress **link = &state->keys;
-			//get the end of the output keylink
 			while (*link) {
 				link = &(*link)->next;
 			}
 
-			// if 'ctrl shift alt super' still press,make a key node to output end
+			int special_key_num = 0;
+			memset(state->current_combination_key, 0, sizeof(state->current_combination_key));
+
 			if(state->shift_l_hold) {
 				struct wsk_keypress *temp_keypress = calloc(1, sizeof(struct wsk_keypress));
 				strcpy(temp_keypress->name,"Shift_L");
@@ -775,20 +978,15 @@ static void handle_libinput_event(struct wsk_state *state,
 				link = &(*link)->next;
 			}
 
-			//add other key to end of output keylink
 			*link = keypress;
 			strcat(state->current_combination_key, keypress->name);
 			special_key_num ++;
 
-			// detect repeat key
 			if (strcmp(state->prev_combination_keye,"") != 0 && strcmp(state->prev_combination_keye,state->current_combination_key) == 0) {
-				
 				int del_charnum = caculat_del_charnum_of_int(state->combination_keye_repetition);
 				if (state->combination_keye_repetition > 2)
 					del_last_key(state,special_key_num + del_charnum);
-
 				state->combination_keye_repetition ++;
-
 				if (state->combination_keye_repetition > 2) {
 					int add_charnum = caculat_add_charnum_of_int(state->combination_keye_repetition);
 					attach_repeat_flag(state,state->combination_keye_repetition,add_charnum);
@@ -878,6 +1076,7 @@ int main(int argc, char *argv[]) {
 	state.shift_l_hold = 0;
 	state.shift_r_hold = 0;
 	state.combination_keye_repetition = 1;
+	state.mask = (struct mask_state){0};
 	state.inspect = false;
 	state.last_was_release = true;
 
@@ -927,6 +1126,21 @@ int main(int argc, char *argv[]) {
 					"[-t timeout]\n\t[-a top|left|right|bottom] [-m margin] "
 					"[-o output] [-l numOfLengthLimit] [-i]");
 			return 1;
+		}
+	}
+
+	const char *mask_env = getenv("WSHOWKEYS_MASK");
+	if (mask_env) {
+		char *env_copy = strdup(mask_env);
+		if (env_copy) {
+			char *tok = strtok(env_copy, ",");
+			while (tok && state.mask.num_patterns < MASK_PATTERNS_MAX) {
+				strncpy(state.mask.patterns[state.mask.num_patterns], tok, 255);
+				state.mask.patterns[state.mask.num_patterns][255] = '\0';
+				state.mask.num_patterns++;
+				tok = strtok(NULL, ",");
+			}
+			free(env_copy);
 		}
 	}
 
@@ -1046,6 +1260,7 @@ int main(int argc, char *argv[]) {
 		                + (now.tv_nsec - state.last_key.tv_nsec);
 		if (state.last_was_release && elapsed_ns > (long)state.timeout * 1000000L) {
 			clear_full_keylink(key,&state);
+			mask_reset(&state.mask);
 		} else {
 			//caulate whether output len is reach len max limit
 			const char *prev_display = NULL;
