@@ -23,7 +23,20 @@
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
 #include "xdg-output-unstable-v1-client-protocol.h"
 
-static struct pool_buffer buffer;
+#ifdef WSK_DEBUG
+static FILE *trace_file = NULL;
+#define WSK_TRACE(fmt, ...) do { \
+	if (trace_file) { \
+		struct timespec _ts; \
+		clock_gettime(CLOCK_MONOTONIC, &_ts); \
+		fprintf(trace_file, "[%ld.%06ld] " fmt "\n", \
+			_ts.tv_sec, _ts.tv_nsec / 1000, ##__VA_ARGS__); \
+		fflush(trace_file); \
+	} \
+} while(0)
+#else
+#define WSK_TRACE(fmt, ...) do {} while(0)
+#endif
 
 #define MASK_PATTERNS_MAX 32
 #define MASK_BUFFER_MAX 256
@@ -105,6 +118,12 @@ struct wsk_state {
 	char prev_combination_keye[128];
 
 	int combination_keye_repetition;
+	bool resize_pending;
+	bool dirty;
+	struct pool_buffer buffer_pool[2];
+	cairo_surface_t *recording;
+	cairo_t *recording_cairo;
+	cairo_font_options_t *font_options;
 	struct mask_state mask;
 
 	enum { OUTPUT_DEFAULT, OUTPUT_PINNED } output_mode;
@@ -222,85 +241,98 @@ static void render_to_cairo(cairo_t *cairo, struct wsk_state *state, int scale, 
 }
 
 static void render_frame(struct wsk_state *state) {
-	cairo_surface_t *recorder = cairo_recording_surface_create(CAIRO_CONTENT_COLOR_ALPHA, NULL);
-	cairo_t *cairo = cairo_create(recorder);
-	cairo_set_antialias(cairo, CAIRO_ANTIALIAS_BEST);
-	cairo_font_options_t *fo = cairo_font_options_create();
-	cairo_font_options_set_hint_style(fo, CAIRO_HINT_STYLE_FULL);
-	cairo_font_options_set_antialias(fo, CAIRO_ANTIALIAS_SUBPIXEL);
-	if (state->output) {
-		cairo_font_options_set_subpixel_order(fo, to_cairo_subpixel_order(state->output->subpixel));
-	}
-	cairo_set_font_options(cairo, fo);
-	cairo_font_options_destroy(fo);
-	// set cairo state
-	cairo_save(cairo);
-	//set operation to clear
-	cairo_set_operator(cairo, CAIRO_OPERATOR_CLEAR);
-	//clear
-	cairo_paint(cairo);
+	WSK_TRACE("render_frame entry");
+	int scale = state->output ? state->output->scale : 1;
 
-	//make cairo restore to no clear state
+	if (!state->recording) {
+		state->recording = cairo_recording_surface_create(CAIRO_CONTENT_COLOR_ALPHA, NULL);
+		state->recording_cairo = cairo_create(state->recording);
+
+		state->font_options = cairo_font_options_create();
+		cairo_font_options_set_hint_style(state->font_options, CAIRO_HINT_STYLE_FULL);
+		cairo_font_options_set_antialias(state->font_options, CAIRO_ANTIALIAS_SUBPIXEL);
+		if (state->output) {
+			cairo_font_options_set_subpixel_order(state->font_options,
+				to_cairo_subpixel_order(state->output->subpixel));
+		}
+	}
+
+	cairo_t *cairo = state->recording_cairo;
+	cairo_set_antialias(cairo, CAIRO_ANTIALIAS_BEST);
+	cairo_set_font_options(cairo, state->font_options);
+
+	cairo_save(cairo);
+	cairo_set_operator(cairo, CAIRO_OPERATOR_CLEAR);
+	cairo_paint(cairo);
 	cairo_restore(cairo);
 
-	int scale = state->output ? state->output->scale : 1;
 	uint32_t width = 0, height = 0;
-
-	// paint keylink to screen
 	render_to_cairo(cairo, state, scale, &width, &height);
+
 	if (height / scale != state->height || width / scale != state->width || state->width == 0) {
-		// Reconfigure surface
 		if (width == 0 || height == 0) {
-			// Clear: paint recording (background only) to clear keys
-			if (state->width && state->height &&
-			    create_buffer(state->shm, &buffer, state->width * scale, state->height * scale,
-					  WL_SHM_FORMAT_ARGB8888)) {
-				cairo_t *shm = buffer.cairo;
-				cairo_save(shm);
-				cairo_set_operator(shm, CAIRO_OPERATOR_CLEAR);
-				cairo_paint(shm);
-				cairo_restore(shm);
-				cairo_set_source_surface(shm, recorder, 0.0, 0.0);
-				cairo_paint(shm);
-				wl_surface_set_buffer_scale(state->surface, scale);
-				wl_surface_attach(state->surface, buffer.buffer, 0, 0);
-				wl_surface_damage_buffer(state->surface, 0, 0, state->width * scale,
-							 state->height * scale);
-				wl_surface_commit(state->surface);
-				destroy_buffer(&buffer);
+			if (state->width && state->height) {
+				struct pool_buffer *buf = get_next_buffer(state->shm,
+					state->buffer_pool, state->width * scale, state->height * scale);
+				if (buf) {
+					cairo_t *shm = buf->cairo;
+					cairo_set_operator(shm, CAIRO_OPERATOR_CLEAR);
+					cairo_paint(shm);
+					wl_surface_set_buffer_scale(state->surface, scale);
+					wl_surface_attach(state->surface, buf->buffer, 0, 0);
+					wl_surface_damage_buffer(state->surface, 0, 0,
+						state->width * scale, state->height * scale);
+					WSK_TRACE("wl_surface_commit (path=clear)");
+					wl_surface_commit(state->surface);
+				}
 			}
-		} else {
+			state->resize_pending = false;
+		} else if (!state->resize_pending) {
+			state->resize_pending = true;
 			zwlr_layer_surface_v1_set_size(state->layer_surface, width / scale, height / scale);
-			// TODO: this could infinite loop if the compositor assigns us a
-			// different height than what we asked for
-			wl_surface_commit(state->surface);
+			if (state->width && state->height) {
+				struct pool_buffer *buf = get_next_buffer(state->shm,
+					state->buffer_pool, state->width * scale, state->height * scale);
+				if (buf) {
+					cairo_t *shm = buf->cairo;
+					cairo_save(shm);
+					cairo_set_operator(shm, CAIRO_OPERATOR_CLEAR);
+					cairo_paint(shm);
+					cairo_restore(shm);
+					cairo_set_source_surface(shm, state->recording, 0.0, 0.0);
+					cairo_paint(shm);
+					wl_surface_set_buffer_scale(state->surface, scale);
+					wl_surface_attach(state->surface, buf->buffer, 0, 0);
+					wl_surface_damage_buffer(state->surface, 0, 0,
+						state->width * scale, state->height * scale);
+					WSK_TRACE("wl_surface_commit (path=resize)");
+					wl_surface_commit(state->surface);
+				}
+			}
 		}
 	} else if (height > 0) {
-		// Replay recording into shm and send it off
-		if (!create_buffer(state->shm, &buffer, state->width * scale, state->height * scale,
-				   WL_SHM_FORMAT_ARGB8888)) {
-			goto cleanup;
+		struct pool_buffer *buf = get_next_buffer(state->shm,
+			state->buffer_pool, state->width * scale, state->height * scale);
+		if (!buf) {
+			return;
 		}
-		cairo_t *shm = buffer.cairo;
+		cairo_t *shm = buf->cairo;
 
 		cairo_save(shm);
 		cairo_set_operator(shm, CAIRO_OPERATOR_CLEAR);
 		cairo_paint(shm);
 		cairo_restore(shm);
 
-		cairo_set_source_surface(shm, recorder, 0.0, 0.0);
+		cairo_set_source_surface(shm, state->recording, 0.0, 0.0);
 		cairo_paint(shm);
 
 		wl_surface_set_buffer_scale(state->surface, scale);
-		wl_surface_attach(state->surface, buffer.buffer, 0, 0);
-		wl_surface_damage_buffer(state->surface, 0, 0, state->width * scale, state->height * scale);
+		wl_surface_attach(state->surface, buf->buffer, 0, 0);
+		wl_surface_damage_buffer(state->surface, 0, 0,
+			state->width * scale, state->height * scale);
+		WSK_TRACE("wl_surface_commit (path=normal)");
 		wl_surface_commit(state->surface);
-		destroy_buffer(&buffer);
 	}
-
-cleanup:
-	cairo_destroy(cairo);
-	cairo_surface_destroy(recorder);
 }
 
 bool surface_is_configured(struct wsk_state *state) {
@@ -308,21 +340,19 @@ bool surface_is_configured(struct wsk_state *state) {
 }
 
 static void set_dirty(struct wsk_state *state) {
-	if (!surface_is_configured(state)) {
-		return;
-	}
-	if (state->surface) {
-		render_frame(state);
-	}
+	WSK_TRACE("set_dirty called (was %d)", state->dirty);
+	state->dirty = true;
 }
 
 static void layer_surface_configure(void *data, struct zwlr_layer_surface_v1 *zwlr_layer_surface_v1, uint32_t serial,
 				    uint32_t width, uint32_t height) {
 	struct wsk_state *state = data;
+	WSK_TRACE("configure serial=%u w=%u h=%u (current w=%u h=%u resize_pending=%d)",
+		serial, width, height, state->width, state->height, state->resize_pending);
 	state->width = width;
 	state->height = height;
+	state->resize_pending = false;
 	zwlr_layer_surface_v1_ack_configure(zwlr_layer_surface_v1, serial);
-	set_dirty(state);
 }
 
 static void layer_surface_closed(void *data, struct zwlr_layer_surface_v1 *zwlr_layer_surface_v1) {
@@ -830,6 +860,7 @@ static void handle_libinput_event(struct wsk_state *state, struct libinput_event
 		keypress->utf8[0] = '\0';
 	}
 
+	WSK_TRACE("key_event sym=%u name=%s state=%s", keysym, keypress->name, key_state == LIBINPUT_KEY_STATE_PRESSED ? "pressed" : "released");
 
 	switch (key_state) {
 		case LIBINPUT_KEY_STATE_RELEASED:
@@ -857,6 +888,9 @@ static void handle_libinput_event(struct wsk_state *state, struct libinput_event
 					state->shift_r_hold = 0;
 				}
 				free(keypress);
+				state->last_was_release = 1;
+				clock_gettime(CLOCK_MONOTONIC, &state->last_key);
+				return;
 			}
 			break;
 		case LIBINPUT_KEY_STATE_PRESSED:
@@ -884,7 +918,9 @@ static void handle_libinput_event(struct wsk_state *state, struct libinput_event
 					state->shift_r_hold = 1;
 				}
 				free(keypress);
-				break;
+				state->last_was_release = 0;
+				clock_gettime(CLOCK_MONOTONIC, &state->last_key);
+				return;
 			} else {
 				// Pattern masking — intercept before display
 				int mask_result = mask_check(&state->mask, keypress);
@@ -1087,6 +1123,10 @@ static uint32_t parse_color(const char *color) {
 }
 
 void clear_full_keylink(struct wsk_keypress *key, struct wsk_state *state) {
+	WSK_TRACE("clear_full_keylink");
+	if (!key) {
+		return;
+	}
 	while (key) {
 		struct wsk_keypress *next = key->next;
 		free(key);
@@ -1126,10 +1166,11 @@ int main(int argc, char *argv[]) {
 	state.combination_keye_repetition = 1;
 	state.mask = (struct mask_state) {0};
 	state.inspect = false;
+	state.resize_pending = false;
 	state.last_was_release = true;
 
 	int c;
-	while ((c = getopt(argc, argv, "hib:f:s:F:t:a:m:o:l:")) != -1) {
+	while ((c = getopt(argc, argv, "hib:f:s:F:t:a:m:o:l:D:")) != -1) {
 		switch (c) {
 			case 'l':
 				state.length_limit = atoi(optarg);
@@ -1170,6 +1211,16 @@ int main(int argc, char *argv[]) {
 				state.output_mode = OUTPUT_PINNED;
 				strncpy(state.target_output_name, optarg, sizeof(state.target_output_name) - 1);
 				break;
+#ifdef WSK_DEBUG
+			case 'D':
+				trace_file = fopen(optarg, "w");
+				if (!trace_file) {
+					fprintf(stderr, "Failed to open trace file: %s\n", optarg);
+					return 1;
+				}
+			WSK_TRACE("trace started pid=%d", getpid());
+				break;
+#endif
 			default:
 				fprintf(stderr, "usage: wshowkeys [-b|-f|-s #RRGGBB[AA]] [-F font] "
 						"[-t timeout]\n\t[-a top|left|right|bottom] [-m margin] "
@@ -1319,6 +1370,18 @@ int main(int argc, char *argv[]) {
 			fprintf(stderr, "poll: %s\n", strerror(errno));
 			break;
 		}
+		WSK_TRACE("poll returned revents: libinput=0x%x wayland=0x%x timeout=%d",
+			pollfds[0].revents, pollfds[1].revents, timeout);
+
+		/* Check for fd errors */
+		if (pollfds[0].revents & (POLLHUP | POLLERR | POLLNVAL)) {
+			fprintf(stderr, "poll fd error: libinput fd revents=%#x\n", pollfds[0].revents);
+			break;
+		}
+		if (pollfds[1].revents & (POLLHUP | POLLERR | POLLNVAL)) {
+			fprintf(stderr, "poll fd error: Wayland fd revents=%#x\n", pollfds[1].revents);
+			break;
+		}
 
 		/* Clear out old keys */
 		struct timespec now;
@@ -1328,13 +1391,16 @@ int main(int argc, char *argv[]) {
 		clock_gettime(CLOCK_MONOTONIC, &now);
 		long elapsed_ns =
 			(now.tv_sec - state.last_key.tv_sec) * 1000000000L + (now.tv_nsec - state.last_key.tv_nsec);
+		WSK_TRACE("timeout check: last_was_release=%d elapsed_ms=%ld timeout=%d keys=%p",
+			state.last_was_release, elapsed_ns / 1000000, state.timeout, (void*)key);
 		if (state.last_was_release && elapsed_ns > (long) state.timeout * 1000000L) {
-			clear_full_keylink(key, &state);
-			for (int i = 0; i < state.mask.buffer_len; i++)
-				free(state.mask.buffer[i]);
-			mask_reset(&state.mask);
+			if (state.keys) {
+				clear_full_keylink(key, &state);
+				for (int i = 0; i < state.mask.buffer_len; i++)
+					free(state.mask.buffer[i]);
+				mask_reset(&state.mask);
+			}
 		} else {
-			//caulate whether output len is reach len max limit
 			const char *prev_display = NULL;
 			while (key) {
 				const char *display;
@@ -1359,11 +1425,11 @@ int main(int argc, char *argv[]) {
 				struct wsk_keypress *next = key->next;
 				key = next;
 			}
-			if (all_key_len > state.length_limit) { //reach len max limit
+			if (all_key_len > state.length_limit) {
 				key = state.keys;
 				struct wsk_keypress *next = key->next;
-				free(key); //del the begin key in keylink
-				state.keys = next; // next key become begin key in keylink
+				free(key);
+				state.keys = next;
 				set_dirty(&state);
 			}
 		}
@@ -1377,15 +1443,46 @@ int main(int argc, char *argv[]) {
 			while ((event = libinput_get_event(state.libinput))) {
 				handle_libinput_event(&state, event);
 				libinput_event_destroy(event);
+				WSK_TRACE("libinput event processed");
 			}
 		}
 
-		if ((pollfds[1].revents & POLLIN) && wl_display_dispatch(state.display) == -1) {
-			fprintf(stderr, "wl_display_dispatch: %s\n", strerror(errno));
-			break;
+		if ((pollfds[1].revents & POLLIN)) {
+			int ret_dispatch = wl_display_dispatch(state.display);
+			WSK_TRACE("wl_display_dispatch returned %d", ret_dispatch);
+			if (ret_dispatch == -1) {
+				fprintf(stderr, "wl_display_dispatch: %s\n", strerror(errno));
+				break;
+			}
+		}
+
+		WSK_TRACE("pre-render dirty=%d configured=%d keys=%p",
+			state.dirty, surface_is_configured(&state), (void*)state.keys);
+		if (state.dirty) {
+			state.dirty = false;
+			if (surface_is_configured(&state) && state.surface) {
+				render_frame(&state);
+			}
 		}
 	}
 
+	if (state.recording_cairo) {
+		cairo_destroy(state.recording_cairo);
+	}
+	if (state.recording) {
+		cairo_surface_destroy(state.recording);
+	}
+	if (state.font_options) {
+		cairo_font_options_destroy(state.font_options);
+	}
+	destroy_buffer(&state.buffer_pool[0]);
+	destroy_buffer(&state.buffer_pool[1]);
+	WSK_TRACE("shutting down");
+#ifdef WSK_DEBUG
+	if (trace_file) {
+		fclose(trace_file);
+	}
+#endif
 exit:
 	wl_display_disconnect(state.display);
 	libinput_unref(state.libinput);

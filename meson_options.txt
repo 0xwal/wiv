@@ -2,3 +2,8 @@ option('devpath',
 	type: 'string',
 	value: '/dev/input/',
 	description: 'Platform-specific path to input device files. This must be as specific as possible for security reasons.')
+
+option('wsk_debug',
+	type: 'boolean',
+	value: false,
+	description: 'Enable debug trace logging (WSK_DEBUG)')

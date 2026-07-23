@@ -13,26 +13,15 @@
   in {
     packages = forAllSystems (system: let
       pkgs = import nixpkgs { inherit system; };
-    in {
-      wshowkeys = pkgs.stdenv.mkDerivation {
-        pname = "wshowkeys";
+      mkWshowkeys = { pname, extraFlags ? [] }: pkgs.stdenv.mkDerivation {
+        inherit pname;
         version = "0.1.0";
-
         src = self;
-
         nativeBuildInputs = with pkgs; [ meson ninja pkg-config wayland-scanner ];
         buildInputs = with pkgs; [
-          cairo
-          libinput
-          libxkbcommon
-          pango
-          udev
-          wayland
-          wayland-protocols
+          cairo libinput libxkbcommon pango udev wayland wayland-protocols
         ];
-
-        mesonFlags = [ "-Ddevpath=/dev/input/" ];
-
+        mesonFlags = [ "-Ddevpath=/dev/input/" ] ++ extraFlags;
         meta = with nixpkgs.lib; {
           description = "Displays keypresses on screen on supported Wayland compositors";
           homepage = "https://github.com/DreamMaoMao/myshowkey";
@@ -41,6 +30,9 @@
           maintainers = [ ];
         };
       };
+    in {
+      wshowkeys = mkWshowkeys { pname = "wshowkeys"; };
+      wshowkeys-debug = mkWshowkeys { pname = "wshowkeys-debug"; extraFlags = [ "-Dwsk_debug=true" ]; };
     });
 
     defaultPackage = forAllSystems (system: self.packages.${system}.wshowkeys);

@@ -38,6 +38,10 @@ add_project_arguments([
 	'-DINPUTDEVPATH="@0@"'.format(get_option('devpath')),
 ], language: 'c')
 
+if get_option('wsk_debug')
+	add_project_arguments('-DWSK_DEBUG', language: 'c')
+endif
+
 cairo          = dependency('cairo')
 libinput       = dependency('libinput')
 pango          = dependency('pango')
