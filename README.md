@@ -19,29 +19,36 @@ Forked from https://git.sr.ht/~sircmpwn/wshowkeys as Drew has moved onto other t
 ### arch
 ```bash
 yay -S wshowkeys-mao-git
-
 ```
 
-### other
+### building from source
 
 Dependencies:
 
 - cairo
 - libinput
 - pango
-- udev 
-- wayland 
-- xkbcommon 
+- udev
+- wayland
+- xkbcommon
 
-```
+```bash
 $ meson build
 $ ninja -C build
-# ninja -C build install
-# sudo chmod a+s /usr/bin/wshowkeys
 ```
 
-wshowkeys must be configured as setuid during installation. It requires root
-permissions to read input events. These permissions are dropped after startup.
+### permissions
+
+wshowkeys reads `/dev/input/` devices to capture keypresses.
+Add your user to the `input` group:
+
+```bash
+sudo usermod -aG input $USER
+```
+
+Then **log out and back in** for the change to take effect.
+
+After that, run `./build/wshowkeys` directly — no root or setuid required.
 
 ## Usage
 

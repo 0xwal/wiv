@@ -8,6 +8,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <time.h>
@@ -906,13 +907,11 @@ void clear_full_keylink(struct wsk_keypress *key,struct wsk_state *state) {
 }
 
 int main(int argc, char *argv[]) {
-	/* NOTICE: This code runs as root */
 	struct wsk_state state = { 0 };
 	if (devmgr_start(&state.devmgr, &state.devmgr_pid, INPUTDEVPATH) > 0) {
 		return 1;
 	}
 
-	/* Begin normal user code: */
 	int ret = 0;
 
 	unsigned int anchor = 0;
