@@ -18,6 +18,7 @@
 #include "devmgr.h"
 #include "shm.h"
 #include "pango.h"
+#include "keymap.h"
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
 #include "xdg-output-unstable-v1-client-protocol.h"
 
@@ -70,6 +71,7 @@ struct wsk_state {
 	struct timespec last_key;
 
 	bool run;
+	bool inspect;
 	//state of function key
 	int ctrl_l_hold;
 	int ctrl_r_hold;
@@ -131,105 +133,26 @@ static cairo_subpixel_order_t to_cairo_subpixel_order(
 }
 
 
-static int get_char_width(char *name) {
-	if(strstr("⏎ ␣ ⇦ ⇧ ⇨ ",name)){
-		return 4;
-	} else if(strstr("⌫ F12 F10 F11  Esc ",name)){
-		return 5;
-	} else if(strstr("ijl-\\*()!,./[]{}012",name)) {
-		return 1;
-	} else if(strstr("-=+abcdefghkmnoqrstuvwxyz@#$%^&?><",name)) {
-		return 2;
-	} else if(strstr("F1F2F3F4F5F6F7F8F93456789",name)) {
-		return 3;
-	} else if(strstr(" Ctrl+",name)) {
-		return 8;
-	} else if(strstr(" Alt+",name)) {
-		return 6;
-	} else if(strstr(" Shift+",name)) {
-		return 10;
-	} else if(strstr(" Super+",name)) {
-		return 10;
-	} else if(strstr("Tab ",name)) {
-		return 10;
-	} else if(strstr("Caps ",name)) {
-		return 8;
-	} else {
-		return strlen(name);
-	}
-}
-
-
 //change default keyname to custom name
-static void custome_key_name(char *name){
-    if (strcmp(name, "Return") == 0) {
-        strcpy(name, "⏎ ");
-    } else if (strcmp(name, "space") == 0) {
-        strcpy(name, "␣ ");
-    } else if (strcmp(name, "Escape") == 0) {
-        strcpy(name, " Esc ");
-    } else if (strcmp(name, "Control_L") == 0) {
-        strcpy(name, " Ctrl+");
-    } else if (strcmp(name, "Control_R") == 0) {
-        strcpy(name, " Ctrl+");
-    } else if (strcmp(name, "Alt_L") == 0) {
-        strcpy(name, " Alt+");
-    } else if (strcmp(name, "Alt_R") == 0) {
-        strcpy(name, " Alt+");
-    } else if (strcmp(name, "Meta_L") == 0) {
-        strcpy(name, " Alt+");
-    } else if (strcmp(name, "Meta_R") == 0) {
-        strcpy(name, " Alt+");
-    } else if (strcmp(name, "Shift_L") == 0) {
-        strcpy(name, " Shift+");
-    } else if (strcmp(name, "Shift_R") == 0) {
-        strcpy(name, " Shift+");
-    } else if (strcmp(name, "Super_L") == 0) {
-        strcpy(name, " Super+");
-    } else if (strcmp(name, "Super_R") == 0) {
-        strcpy(name, " Super+");
-    } else if (strcmp(name, "Tab") == 0) {
-        strcpy(name, "Tab ");
-    } else if (strcmp(name, "backslash") == 0) {
-        strcpy(name, "\\");
-    } else if (strcmp(name, "BackSpace") == 0) {
-        strcpy(name, "⌫ ");
-    } else if (strcmp(name, "Caps_Lock") == 0) {
-        strcpy(name, "Caps ");
-    } else if (strcmp(name, "Left") == 0) {
-        strcpy(name, "⇦ ");
-    } else if (strcmp(name, "Up") == 0) {
-        strcpy(name, "⇧ ");
-    } else if (strcmp(name, "Down") == 0) {
-        strcpy(name, "⇩ ");
-    } else if (strcmp(name, "Right") == 0) {
-        strcpy(name, "⇨ ");
-    } else if (strcmp(name, "KP_Insert") == 0) {
-        strcpy(name, "0");
-    } else if (strcmp(name, "KP_End") == 0) {
-        strcpy(name, "1");
-    } else if (strcmp(name, "KP_Down") == 0) {
-        strcpy(name, "2");
-    } else if (strcmp(name, "KP_Next") == 0) {
-        strcpy(name, "3");
-    } else if (strcmp(name, "KP_Left") == 0) {
-        strcpy(name, "4");
-    } else if (strcmp(name, "KP_Begin") == 0) {
-        strcpy(name, "5");
-    } else if (strcmp(name, "KP_Right") == 0) {
-        strcpy(name, "6");
-    } else if (strcmp(name, "KP_Home") == 0) {
-        strcpy(name, "7");
-    } else if (strcmp(name, "KP_Up") == 0) {
-        strcpy(name, "8");
-    } else if (strcmp(name, "KP_Prior") == 0) {
-        strcpy(name, "9");
-    } else if (strcmp(name, "KP_Delete") == 0) {
-        strcpy(name, ".");
-    } else if (strcmp(name, "KP_Enter") == 0) {
-        strcpy(name, "⏎ ");
-    }
+static uint32_t parse_color(const char *color);
 
+static const KeymapEntry *keymap_entry(const char *name) {
+	/* exact match first */
+	for (size_t i = 0; i < KEYMAP_LEN; i++)
+		if (!strcmp(keymap[i].name, name))
+			return &keymap[i];
+	/* try without _L or _R suffix */
+	size_t len = strlen(name);
+	if (len > 2 && name[len-2] == '_' && (name[len-1] == 'L' || name[len-1] == 'R')) {
+		char base[128];
+		size_t base_len = len - 2;
+		memcpy(base, name, base_len);
+		base[base_len] = '\0';
+		for (size_t i = 0; i < KEYMAP_LEN; i++)
+			if (!strcmp(keymap[i].name, base))
+				return &keymap[i];
+	}
+	return NULL;
 }
 
 //show key in keylink(begin at state->keys)
@@ -240,33 +163,40 @@ static void render_to_cairo(cairo_t *cairo, struct wsk_state *state,
 	cairo_paint(cairo);
 
 	struct wsk_keypress *key = state->keys;
+	const char *prev_display = NULL;
 	while (key) {
-		bool special = false;
-		char *name = key->utf8;
-		if (!name[0]) { //whether key is special key
-			special = true;
-			cairo_set_source_u32(cairo, state->specialfg);
-			name = key->name;
+		const KeymapEntry *entry = keymap_entry(key->name);
+		const char *display;
+		uint32_t color;
+
+		if (state->inspect) {
+			display = key->name;
+			color = state->specialfg;
+		} else if (entry) {
+			color = entry->fg ? parse_color(entry->fg) : state->foreground;
+			display = entry->display ? entry->display : (key->utf8[0] ? key->utf8 : key->name);
+		} else if (key->utf8[0]) {
+			display = key->utf8;
+			color = state->foreground;
 		} else {
-			cairo_set_source_u32(cairo, state->foreground);
+			display = key->name;
+			color = state->specialfg;
 		}
 
+		const char *pad_before = (prev_display && prev_display[strlen(prev_display)-1] == '+')
+			? "" : KEY_PAD_BEFORE;
+
+		cairo_set_source_u32(cairo, color);
 		cairo_move_to(cairo, *width, 0);
 
 		int w, h;
-		if (special) { 
-			custome_key_name(name);
-			get_text_size(cairo, state->font, &w, &h, NULL, scale, "%s", name);
-			pango_printf(cairo, state->font, scale,  "%s", name);
-		} else {
-			get_text_size(cairo, state->font, &w, &h, NULL, scale, "%s", name);
-			pango_printf(cairo, state->font, scale,  "%s", name);
-		}
+		get_text_size(cairo, state->font, &w, &h, NULL, scale, "%s%s%s", pad_before, display, KEY_PAD_AFTER);
+		pango_printf(cairo, state->font, scale, "%s%s%s", pad_before, display, KEY_PAD_AFTER);
 
-		*width = *width + w;
-		if ((int)*height < h) {
+		*width += w;
+		if ((int)*height < h)
 			*height = h;
-		}
+		prev_display = display;
 		key = key->next;
 	}
 }
@@ -916,9 +846,9 @@ int main(int argc, char *argv[]) {
 
 	unsigned int anchor = 0;
 	int margin = 32;
-	state.background = 0x000000CC;
-	state.specialfg = 0xAAAAAAFF;
-	state.foreground = 0xFFFFFFFF;
+	state.background = 0x00000000;
+	state.specialfg = 0xAAAAAAA0;
+	state.foreground = 0xebdbb2A0;
 	state.font = "Sans Bold 40";
 	state.timeout = 200;
 	state.length_limit = 100;
@@ -931,9 +861,10 @@ int main(int argc, char *argv[]) {
 	state.shift_l_hold = 0;
 	state.shift_r_hold = 0;
 	state.combination_keye_repetition = 1;
+	state.inspect = false;
 
 	int c;
-	while ((c = getopt(argc, argv, "hb:f:s:F:t:a:m:o:l:")) != -1) {
+	while ((c = getopt(argc, argv, "hib:f:s:F:t:a:m:o:l:")) != -1) {
 		switch (c) {
 		case 'l':
 			state.length_limit = atoi(optarg);
@@ -967,13 +898,16 @@ int main(int argc, char *argv[]) {
 		case 'm':
 			margin = atoi(optarg);
 			break;
+		case 'i':
+			state.inspect = true;
+			break;
 		case 'o':
 			fprintf(stderr, "-o is unimplemented\n");
 			return 0;
 		default:
 			fprintf(stderr, "usage: wshowkeys [-b|-f|-s #RRGGBB[AA]] [-F font] "
 					"[-t timeout]\n\t[-a top|left|right|bottom] [-m margin] "
-					"[-o output] [-l numOfLengthLimit]");
+					"[-o output] [-l numOfLengthLimit] [-i]");
 			return 1;
 		}
 	}
@@ -1100,15 +1034,28 @@ int main(int argc, char *argv[]) {
 			clear_full_keylink(key,&state);
 		} else {
 			//caulate whether output len is reach len max limit
-			char *temp_name = calloc(1, 129);
+			const char *prev_display = NULL;
 			while (key) {
-				strcpy(temp_name,key->name);
-				custome_key_name(temp_name);
-				all_key_len = all_key_len + get_char_width(temp_name);
+				const char *display;
+				if (state.inspect) {
+					display = key->name;
+				} else {
+					const KeymapEntry *entry = keymap_entry(key->name);
+					if (entry) {
+						display = entry->display ? entry->display : (key->utf8[0] ? key->utf8 : key->name);
+					} else if (key->utf8[0]) {
+						display = key->utf8;
+					} else {
+						display = key->name;
+					}
+				}
+				const char *pad_before = (prev_display && prev_display[strlen(prev_display)-1] == '+')
+					? "" : KEY_PAD_BEFORE;
+				all_key_len += strlen(pad_before) + strlen(display) + strlen(KEY_PAD_AFTER);
+				prev_display = display;
 				struct wsk_keypress *next = key->next;
 				key = next;
 			}
-			free(temp_name);
 			if(all_key_len > state.length_limit){ //reach len max limit
 				key = state.keys;
 				struct wsk_keypress *next = key->next;
