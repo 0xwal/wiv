@@ -620,44 +620,20 @@ static void attach_to_last(struct wsk_state *state, struct wsk_keypress *key) {
 	*attach = key;
 }
 
+static const char *numchar_map[] = {
+	REPEAT_0, REPEAT_1, REPEAT_2, REPEAT_3, REPEAT_4,
+	REPEAT_5, REPEAT_6, REPEAT_7, REPEAT_8, REPEAT_9
+};
+
 static void change_numchar_to_special(char *target, char numchar) {
-	switch (numchar) {
-		case '0':
-			strcpy(target, "₀");
-			break;
-		case '1':
-			strcpy(target, "₁");
-			break;
-		case '2':
-			strcpy(target, "₂");
-			break;
-		case '3':
-			strcpy(target, "₃");
-			break;
-		case '4':
-			strcpy(target, "₄");
-			break;
-		case '5':
-			strcpy(target, "₅");
-			break;
-		case '6':
-			strcpy(target, "₆");
-			break;
-		case '7':
-			strcpy(target, "₇");
-			break;
-		case '8':
-			strcpy(target, "₈");
-			break;
-		case '9':
-			strcpy(target, "₉");
-			break;
+	if (numchar >= '0' && numchar <= '9') {
+		strcpy(target, numchar_map[numchar - '0']);
 	}
 }
 
 static void attach_repeat_flag(struct wsk_state *state, int num, int num_len) {
 	struct wsk_keypress *repeat_flag = calloc(1, sizeof(struct wsk_keypress));
-	strcpy(repeat_flag->name, "ₓ");
+	strcpy(repeat_flag->name, REPEAT_MARKER);
 	attach_to_last(state, repeat_flag);
 
 	char *repeat_num_char = calloc(num_len + 1, sizeof(char));
@@ -1149,10 +1125,10 @@ int main(int argc, char *argv[]) {
 
 	state.anchor = ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
 	state.margin = 32;
-	state.background = 0x00000000;
-	state.specialfg = 0xAAAAAAA0;
-	state.foreground = 0xebdbb2A0;
-	state.font = "Sans Bold 40";
+	state.background = COLOR_BACKGROUND;
+	state.specialfg = COLOR_SPECIAL_FG;
+	state.foreground = COLOR_FOREGROUND;
+	state.font = DEFAULT_FONT;
 	state.timeout = 200;
 	state.length_limit = 100;
 	state.ctrl_l_hold = 0;

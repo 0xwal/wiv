@@ -2,34 +2,54 @@
 #define KEYMAP_H
 
 #define KEY_PAD_BEFORE ""
-#define KEY_PAD_AFTER  ""
+#define KEY_PAD_AFTER ""
+
+#define REPEAT_MARKER "ₓ"
+#define REPEAT_0 "₀"
+#define REPEAT_1 "₁"
+#define REPEAT_2 "₂"
+#define REPEAT_3 "₃"
+#define REPEAT_4 "₄"
+#define REPEAT_5 "₅"
+#define REPEAT_6 "₆"
+#define REPEAT_7 "₇"
+#define REPEAT_8 "₈"
+#define REPEAT_9 "₉"
+
+#define COLOR_BACKGROUND 0x00000000
+#define COLOR_SPECIAL_FG 0xebdbb240
+#define COLOR_FOREGROUND 0xebdbb2f0
+
+#define DEFAULT_FONT "Sans Bold 40"
 
 typedef struct {
-	const char *name;     /* xkb keysym name, e.g. "Return", "a", "Control_L" */
-	const char *display;  /* UTF-8 display text, e.g. "⏎ ", "🅰️", " Ctrl+" */
-	const char *fg;       /* text color "#RRGGBB" or "#RRGGBBAA", NULL → global fg */
+	const char *name; /* xkb keysym name, e.g. "Return", "a", "Control_L" */
+	const char *display; /* UTF-8 display text, e.g. "⏎ ", "🅰️", " Ctrl+" */
+	const char *fg; /* text color "#RRGGBB" or "#RRGGBBAA", NULL → global fg */
 } KeymapEntry;
 
 /* Variadic macro: 2 args → no color override, 3 args → with color */
-#define K(...)    K_GET_MACRO(__VA_ARGS__, K3, K2)(__VA_ARGS__)
+#define K(...) K_GET_MACRO(__VA_ARGS__, K3, K2)(__VA_ARGS__)
 #define K_GET_MACRO(_1, _2, _3, NAME, ...) NAME
-#define K2(n, d)  { n, d, NULL }
-#define K3(n, d, f) { n, d, f }
-#define KC(name, fg) { name, NULL, fg }
+#define K2(n, d) {n, d, NULL}
+#define K3(n, d, f) {n, d, f}
+#define KC(name, fg) {name, NULL, fg}
 
+// clang-format off
 static const KeymapEntry keymap[] = {
-	K("Return",    "⏎"),
+	// K("Return",    "⏎"),
+	K("Return",    "⮐"),
 	K("space",     "␣"),
-	K("Escape",    "Esc"),
-	K("Control",   "Ctrl+"),
-	K("Alt",       "Alt+"),
-	K("Meta",      "Alt+"),
+	K("Escape",    "⎌"), // ␛
+	K("Control",   "⎈"),
+	K("Alt",       "✵"),
+	K("Meta",      "✵"),
 	K("Shift",     "⇧"),
-	K("Super",     "Super+"),
-	K("Tab",       "Tab"),
-	K("backslash", "\\"),
-	K("BackSpace", "⌫"),
-	K("Caps_Lock", "Caps"),
+	K("Super",     "✬"),
+	K("Tab",       "⮔"),
+	K("backslash", "∖"),
+	K("BackSpace", "␈"),
+	K("Caps_Lock", "⇪"),
 	K("Left",      "⇦"),
 	K("Up",        "⇧"),
 	K("Down",      "⇩"),
@@ -46,7 +66,26 @@ static const KeymapEntry keymap[] = {
 	K("KP_Prior",  "9"),
 	K("KP_Delete", "."),
 	K("KP_Enter",  "⏎"),
-	KC("k",    "#B5B520"),
+	// K("0", "⁰"),
+	// K("1", "¹"),
+	// K("2", "²"),
+	// K("3", "³"),
+	// K("4", "⁴"),
+	// K("5", "⁵"),
+	// K("6", "⁶"),
+	// K("7", "⁷"),
+	// K("8", "⁸"),
+	// K("9", "⁹"),
+	K("0", "₀"),
+	K("1", "₁"),
+	K("2", "₂"),
+	K("3", "₃"),
+	K("4", "₄"),
+	K("5", "₅"),
+	K("6", "₆"),
+	K("7", "₇"),
+	K("8", "₈"),
+	K("9", "₉"),
 };
 #define KEYMAP_LEN (sizeof(keymap) / sizeof(keymap[0]))
 
