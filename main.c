@@ -48,8 +48,11 @@ struct wsk_keypress {
 
 struct wsk_output {
 	struct wl_output *output;
+	struct zxdg_output_v1 *xdg_output;
 	int scale;
 	enum wl_output_subpixel subpixel;
+	char name[128];
+	uint32_t registry_name;
 	struct wsk_output *next;
 };
 
@@ -103,6 +106,11 @@ struct wsk_state {
 
 	int combination_keye_repetition;
 	struct mask_state mask;
+
+	enum { OUTPUT_DEFAULT, OUTPUT_PINNED } output_mode;
+	char target_output_name[128];
+	uint32_t anchor;
+	int margin;
 };
 
 /* void logtofile(const char *fmt, ...) { */
@@ -321,8 +329,8 @@ static void set_dirty(struct wsk_state *state) {
 }
 
 static void layer_surface_configure(void *data,
-			struct zwlr_layer_surface_v1 *zwlr_layer_surface_v1,
-			uint32_t serial, uint32_t width, uint32_t height) {
+		struct zwlr_layer_surface_v1 *zwlr_layer_surface_v1,
+		uint32_t serial, uint32_t width, uint32_t height) {
 	struct wsk_state *state = data;
 	state->width = width;
 	state->height = height;
@@ -487,6 +495,35 @@ static const struct wl_output_listener wl_output_listener = {
 	.scale = output_scale,
 };
 
+static void xdg_output_handle_name(void *data,
+		struct zxdg_output_v1 *xdg_output, const char *name) {
+	struct wsk_output *output = data;
+	strncpy(output->name, name, sizeof(output->name) - 1);
+	output->name[sizeof(output->name) - 1] = '\0';
+}
+
+static void xdg_output_handle_logical_position(void *data,
+		struct zxdg_output_v1 *xdg_output, int32_t x, int32_t y) {}
+
+static void xdg_output_handle_logical_size(void *data,
+		struct zxdg_output_v1 *xdg_output, int32_t width, int32_t height) {}
+
+static void xdg_output_handle_done(void *data,
+		struct zxdg_output_v1 *xdg_output) {}
+
+static void xdg_output_handle_description(void *data,
+		struct zxdg_output_v1 *xdg_output, const char *description) {
+	// Not needed
+}
+
+static const struct zxdg_output_v1_listener xdg_output_listener = {
+	.logical_position = xdg_output_handle_logical_position,
+	.logical_size = xdg_output_handle_logical_size,
+	.done = xdg_output_handle_done,
+	.name = xdg_output_handle_name,
+	.description = xdg_output_handle_description,
+};
+
 //add keyboard event listen
 static void registry_global(void *data, struct wl_registry *wl_registry,
 		uint32_t name, const char *interface, uint32_t version) {
@@ -501,7 +538,7 @@ static void registry_global(void *data, struct wl_registry *wl_registry,
 				name, &wl_seat_interface, 5);
 	} else if (strcmp(interface, zxdg_output_manager_v1_interface.name) == 0) {
 		state->output_mgr = wl_registry_bind(wl_registry,
-				name, &zxdg_output_manager_v1_interface, 1);
+				name, &zxdg_output_manager_v1_interface, 3);
 	} else if (strcmp(interface, zwlr_layer_shell_v1_interface.name) == 0) {
 		state->layer_shell = wl_registry_bind(wl_registry,
 				name, &zwlr_layer_shell_v1_interface, 1);
@@ -510,12 +547,20 @@ static void registry_global(void *data, struct wl_registry *wl_registry,
 		output->output = wl_registry_bind(wl_registry,
 				name, &wl_output_interface, 3);
 		output->scale = 1;
+		output->name[0] = '\0';
+		output->xdg_output = NULL;
+		output->registry_name = name;
 		struct wsk_output **link = &state->outputs;
 		while (*link) {
 			link = &(*link)->next;
 		}
 		*link = output;
 		wl_output_add_listener(output->output, &wl_output_listener, output);
+		if (state->output_mgr) {
+			output->xdg_output = zxdg_output_manager_v1_get_xdg_output(
+					state->output_mgr, output->output);
+			zxdg_output_v1_add_listener(output->xdg_output, &xdg_output_listener, output);
+		}
 	}
 }
 
@@ -1059,8 +1104,8 @@ int main(int argc, char *argv[]) {
 
 	int ret = 0;
 
-	unsigned int anchor = ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
-	int margin = 32;
+	state.anchor = ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
+	state.margin = 32;
 	state.background = 0x00000000;
 	state.specialfg = 0xAAAAAAA0;
 	state.foreground = 0xebdbb2A0;
@@ -1103,24 +1148,25 @@ int main(int argc, char *argv[]) {
 			break;
 		case 'a':
 			if (strcmp(optarg, "top") == 0) {
-				anchor |= ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP;
+				state.anchor |= ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP;
 			} else if (strcmp(optarg, "left") == 0) {
-				anchor |= ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT;
+				state.anchor |= ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT;
 			} else if (strcmp(optarg, "right") == 0) {
-				anchor |= ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
+				state.anchor |= ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
 			} else if (strcmp(optarg, "bottom") == 0) {
-				anchor |= ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM;
+				state.anchor |= ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM;
 			}
 			break;
 		case 'm':
-			margin = atoi(optarg);
+			state.margin = atoi(optarg);
 			break;
 		case 'i':
 			state.inspect = true;
 			break;
 		case 'o':
-			fprintf(stderr, "-o is unimplemented\n");
-			return 0;
+			state.output_mode = OUTPUT_PINNED;
+			strncpy(state.target_output_name, optarg, sizeof(state.target_output_name) - 1);
+			break;
 		default:
 			fprintf(stderr, "usage: wshowkeys [-b|-f|-s #RRGGBB[AA]] [-F font] "
 					"[-t timeout]\n\t[-a top|left|right|bottom] [-m margin] "
@@ -1197,17 +1243,37 @@ int main(int argc, char *argv[]) {
 		}
 	}
 
-	// TODO: Listener for xdg output
-
 	wl_seat_add_listener(state.seat, &wl_seat_listener, &state);
 	wl_display_roundtrip(state.display);
-	
+
+	// Resolve startup output for PINNED mode
+	struct wl_output *startup_output = NULL;
+	if (state.output_mode == OUTPUT_PINNED) {
+		struct wsk_output *wsk_out = state.outputs;
+		while (wsk_out) {
+			if (strcmp(wsk_out->name, state.target_output_name) == 0) {
+				startup_output = wsk_out->output;
+				break;
+			}
+			wsk_out = wsk_out->next;
+		}
+		if (!startup_output) {
+			fprintf(stderr, "output '%s' not found, using default\n",
+					state.target_output_name);
+			state.output_mode = OUTPUT_DEFAULT;
+		}
+	}
+
 	state.surface = wl_compositor_create_surface(state.compositor);
 	assert(state.surface);
 	wl_surface_add_listener(state.surface, &wl_surface_listener, &state);
 
+	struct wl_output *layer_output = NULL;
+	if (state.output_mode == OUTPUT_PINNED)
+		layer_output = startup_output;
+
 	state.layer_surface = zwlr_layer_shell_v1_get_layer_surface(
-			state.layer_shell, state.surface, NULL,
+			state.layer_shell, state.surface, layer_output,
 			ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, "showkeys");
 	assert(state.layer_surface);
 
@@ -1219,9 +1285,9 @@ int main(int argc, char *argv[]) {
 	zwlr_layer_surface_v1_add_listener(
 			state.layer_surface, &layer_surface_listener, &state);
 	zwlr_layer_surface_v1_set_size(state.layer_surface, 1, 1);
-	zwlr_layer_surface_v1_set_anchor(state.layer_surface, anchor);
+	zwlr_layer_surface_v1_set_anchor(state.layer_surface, state.anchor);
 	zwlr_layer_surface_v1_set_margin(state.layer_surface,
-			margin, margin, margin, margin);
+			state.margin, state.margin, state.margin, state.margin);
 	zwlr_layer_surface_v1_set_exclusive_zone(state.layer_surface, -1);
 	wl_surface_commit(state.surface);
 
