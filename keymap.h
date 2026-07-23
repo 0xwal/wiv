@@ -4,23 +4,25 @@
 #define KEY_PAD_BEFORE ""
 #define KEY_PAD_AFTER ""
 
-#define REPEAT_MARKER "ₓ"
-#define REPEAT_0 "₀"
-#define REPEAT_1 "₁"
-#define REPEAT_2 "₂"
-#define REPEAT_3 "₃"
-#define REPEAT_4 "₄"
-#define REPEAT_5 "₅"
-#define REPEAT_6 "₆"
-#define REPEAT_7 "₇"
-#define REPEAT_8 "₈"
-#define REPEAT_9 "₉"
+#define REPEAT_MARKER "⋅"
+#define REPEAT_0 "0"
+#define REPEAT_1 "1"
+#define REPEAT_2 "2"
+#define REPEAT_3 "3"
+#define REPEAT_4 "4"
+#define REPEAT_5 "5"
+#define REPEAT_6 "6"
+#define REPEAT_7 "7"
+#define REPEAT_8 "8"
+#define REPEAT_9 "9"
 
 #define COLOR_BACKGROUND 0x00000000
 #define COLOR_SPECIAL_FG 0xebdbb240
 #define COLOR_FOREGROUND 0xebdbb2f0
 
 #define DEFAULT_FONT "Sans Bold 40"
+#define DISPLAY_MIN_HEIGHT 100
+#define TEXT_ALIGN_CENTER
 
 typedef struct {
 	const char *name; /* xkb keysym name, e.g. "Return", "a", "Control_L" */
@@ -76,16 +78,16 @@ static const KeymapEntry keymap[] = {
 	// K("7", "⁷"),
 	// K("8", "⁸"),
 	// K("9", "⁹"),
-	K("0", "₀"),
-	K("1", "₁"),
-	K("2", "₂"),
-	K("3", "₃"),
-	K("4", "₄"),
-	K("5", "₅"),
-	K("6", "₆"),
-	K("7", "₇"),
-	K("8", "₈"),
-	K("9", "₉"),
+	// K("0", "₀"),
+	// K("1", "₁"),
+	// K("2", "₂"),
+	// K("3", "₃"),
+	// K("4", "₄"),
+	// K("5", "₅"),
+	// K("6", "₆"),
+	// K("7", "₇"),
+	// K("8", "₈"),
+	// K("9", "₉"),
 };
 #define KEYMAP_LEN (sizeof(keymap) / sizeof(keymap[0]))
 

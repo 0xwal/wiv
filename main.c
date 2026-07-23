@@ -56,6 +56,7 @@ struct wsk_keypress {
 	xkb_keysym_t sym;
 	char name[128];
 	char utf8[128];
+	bool is_repeat;
 	struct wsk_keypress *next;
 };
 
@@ -79,6 +80,7 @@ struct wsk_state {
 	const char *font;
 	int timeout;
 	int length_limit;
+	uint32_t min_height;
 
 	struct wl_display *display;
 	struct wl_registry *registry;
@@ -201,6 +203,44 @@ static void render_to_cairo(cairo_t *cairo, struct wsk_state *state, int scale, 
 	cairo_set_source_u32(cairo, state->background);
 	cairo_paint(cairo);
 
+	/* First pass: measure all keys to find max height */
+	int max_h = 0;
+	{
+		struct wsk_keypress *key = state->keys;
+		const char *prev_display = NULL;
+		while (key) {
+			if (key->is_repeat) {
+				key = key->next;
+				continue;
+			}
+
+			const KeymapEntry *entry = keymap_entry(key->name);
+			const char *display;
+
+			if (state->inspect) {
+				display = key->name;
+			} else if (entry) {
+				display = entry->display ? entry->display : (key->utf8[0] ? key->utf8 : key->name);
+			} else if (key->utf8[0]) {
+				display = key->utf8;
+			} else {
+				display = key->name;
+			}
+
+			const char *pad_before =
+				(prev_display && prev_display[strlen(prev_display) - 1] == '+') ? "" : KEY_PAD_BEFORE;
+
+			int w, h;
+			get_text_size(cairo, state->font, &w, &h, NULL, scale, "%s%s%s", pad_before, display, KEY_PAD_AFTER);
+			if (h > max_h)
+				max_h = h;
+
+			prev_display = display;
+			key = key->next;
+		}
+	}
+
+	/* Second pass: draw keys with vertical alignment offset */
 	struct wsk_keypress *key = state->keys;
 	const char *prev_display = NULL;
 	while (key) {
@@ -225,16 +265,25 @@ static void render_to_cairo(cairo_t *cairo, struct wsk_state *state, int scale, 
 		const char *pad_before =
 			(prev_display && prev_display[strlen(prev_display) - 1] == '+') ? "" : KEY_PAD_BEFORE;
 
-		cairo_set_source_u32(cairo, color);
-		cairo_move_to(cairo, *width, 0);
-
 		int w, h;
 		get_text_size(cairo, state->font, &w, &h, NULL, scale, "%s%s%s", pad_before, display, KEY_PAD_AFTER);
+
+		int target_h = max_h + (int)state->min_height;
+
+		int y_offset = 0;
+#if defined(TEXT_ALIGN_CENTER)
+		y_offset = (target_h - h) / 2;
+#elif defined(TEXT_ALIGN_BOTTOM)
+		y_offset = target_h - h;
+#endif
+
+		cairo_set_source_u32(cairo, color);
+		cairo_move_to(cairo, *width, y_offset);
 		pango_printf(cairo, state->font, scale, "%s%s%s", pad_before, display, KEY_PAD_AFTER);
 
 		*width += w;
-		if ((int) *height < h)
-			*height = h;
+		if ((int) *height < target_h)
+			*height = target_h;
 		prev_display = display;
 		key = key->next;
 	}
@@ -634,6 +683,7 @@ static void change_numchar_to_special(char *target, char numchar) {
 static void attach_repeat_flag(struct wsk_state *state, int num, int num_len) {
 	struct wsk_keypress *repeat_flag = calloc(1, sizeof(struct wsk_keypress));
 	strcpy(repeat_flag->name, REPEAT_MARKER);
+	repeat_flag->is_repeat = true;
 	attach_to_last(state, repeat_flag);
 
 	char *repeat_num_char = calloc(num_len + 1, sizeof(char));
@@ -643,6 +693,7 @@ static void attach_repeat_flag(struct wsk_state *state, int num, int num_len) {
 		//   printf("%c\n", a[i]); // 打印每个字符
 		struct wsk_keypress *repeat_num = calloc(1, sizeof(struct wsk_keypress));
 		change_numchar_to_special(repeat_num->name, repeat_num_char[i]);
+		repeat_num->is_repeat = true;
 		attach_to_last(state, repeat_num);
 	}
 
@@ -1140,13 +1191,14 @@ int main(int argc, char *argv[]) {
 	state.shift_l_hold = 0;
 	state.shift_r_hold = 0;
 	state.combination_keye_repetition = 1;
+	state.min_height = DISPLAY_MIN_HEIGHT;
 	state.mask = (struct mask_state) {0};
 	state.inspect = false;
 	state.resize_pending = false;
 	state.last_was_release = true;
 
 	int c;
-	while ((c = getopt(argc, argv, "hib:f:s:F:t:a:m:o:l:D:")) != -1) {
+	while ((c = getopt(argc, argv, "hib:f:s:F:t:a:m:o:l:D:H:")) != -1) {
 		switch (c) {
 			case 'l':
 				state.length_limit = atoi(optarg);
@@ -1196,11 +1248,14 @@ int main(int argc, char *argv[]) {
 				}
 			WSK_TRACE("trace started pid=%d", getpid());
 				break;
-#endif
+		#endif
+			case 'H':
+				state.min_height = (uint32_t)atoi(optarg);
+				break;
 			default:
 				fprintf(stderr, "usage: wshowkeys [-b|-f|-s #RRGGBB[AA]] [-F font] "
 						"[-t timeout]\n\t[-a top|left|right|bottom] [-m margin] "
-						"[-o output] [-l numOfLengthLimit] [-i]");
+						"[-o output] [-l numOfLengthLimit] [-H padding] [-i]");
 				return 1;
 		}
 	}
