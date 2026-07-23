@@ -1,0 +1,51 @@
+---
+Language: Cpp
+BasedOnStyle: LLVM
+
+# Indentation: tabs, 8-char width
+IndentWidth: 8
+UseTab: Always
+TabWidth: 8
+ContinuationIndentWidth: 8
+IndentCaseLabels: true
+IndentPPDirectives: None
+
+# Braces: K&R (same line) for everything
+BreakBeforeBraces: Attach
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+
+# Pointers: int *x style (space before *, none after)
+PointerAlignment: Right
+ReferenceAlignment: Right
+
+# Spacing
+SpaceBeforeParens: ControlStatements
+SpaceInEmptyParentheses: false
+SpaceAfterCStyleCast: true
+SpacesInAngles: false
+SpacesInParentheses: false
+SpacesInSquareBrackets: false
+
+# Function parameters
+BinPackParameters: true
+AlignAfterOpenBracket: Align
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+AlignTrailingComments: false
+AlignOperands: true
+
+# Line length (soft limit, code often goes over)
+ColumnLimit: 120
+
+# Includes
+IncludeBlocks: Preserve
+SortIncludes: false
+
+# Comments
+ReflowComments: false
+
+# Empty line preservation
+MaxEmptyLinesToKeep: 2
+KeepEmptyLinesAtTheStartOfBlocks: false
