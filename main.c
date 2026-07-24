@@ -141,6 +141,7 @@ struct wsk_state {
 	char target_output_name[128];
 	uint32_t anchor;
 	int margin;
+	float opacity;
 };
 
 /* void logtofile(const char *fmt, ...) { */
@@ -162,9 +163,10 @@ struct wsk_state {
 /*   system(cmd); */
 /* } */
 
-static void cairo_set_source_u32(cairo_t *cairo, uint32_t color) {
-	cairo_set_source_rgba(cairo, (color >> (3 * 8) & 0xFF) / 255.0, (color >> (2 * 8) & 0xFF) / 255.0,
-			      (color >> (1 * 8) & 0xFF) / 255.0, (color >> (0 * 8) & 0xFF) / 255.0);
+static void cairo_set_source_u32(cairo_t *cairo, uint32_t color, float opacity) {
+	cairo_set_source_rgba(cairo, (color >> (3 * 8) & 0xFF) / 255.0,
+			      (color >> (2 * 8) & 0xFF) / 255.0,
+			      (color >> (1 * 8) & 0xFF) / 255.0, (color >> (0 * 8) & 0xFF) / 255.0 * opacity);
 }
 
 static cairo_subpixel_order_t to_cairo_subpixel_order(enum wl_output_subpixel subpixel) {
@@ -209,7 +211,7 @@ static const KeymapEntry *keymap_entry(const char *name) {
 //show key in keylink(begin at state->keys)
 static void render_to_cairo(cairo_t *cairo, struct wsk_state *state, int scale, uint32_t *width, uint32_t *height) {
 	cairo_set_operator(cairo, CAIRO_OPERATOR_SOURCE);
-	cairo_set_source_u32(cairo, state->background);
+	cairo_set_source_u32(cairo, state->background, state->opacity);
 	cairo_paint(cairo);
 
 	/* Use font metrics for stable height — avoids per-glyph shifting */
@@ -262,7 +264,7 @@ static void render_to_cairo(cairo_t *cairo, struct wsk_state *state, int scale, 
 		y_offset = target_h - h;
 #endif
 
-		cairo_set_source_u32(cairo, color);
+		cairo_set_source_u32(cairo, color, state->opacity);
 		cairo_move_to(cairo, *width, y_offset);
 		pango_printf(cairo, use_font, scale, "%s%s%s", pad_before, display, KEY_PAD_AFTER);
 
@@ -1252,6 +1254,8 @@ int main(int argc, char *argv[]) {
 
 	bool want_pause = false;
 	bool want_resume = false;
+	bool want_opacity_query = false;
+	const char *opacity_arg = NULL;
 
 	state.anchor = ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
 	state.margin = 32;
@@ -1282,10 +1286,12 @@ int main(int argc, char *argv[]) {
 	state.last_was_release = true;
 	state.sock_fd = -1;
 	state.paused = false;
+	state.opacity = 1.0f;
 	state.sock_path[0] = '\0';
 
 	int c;
-	while ((c = getopt(argc, argv, "hib:f:s:r:F:t:a:m:o:l:D:H:PR")) != -1) {
+	opterr = 0;
+	while ((c = getopt(argc, argv, "hib:f:s:r:F:t:a:m:o:l:D:H:PRO:")) != -1) {
 		switch (c) {
 			case 'l':
 				state.length_limit = atoi(optarg);
@@ -1350,12 +1356,27 @@ int main(int argc, char *argv[]) {
 				state.paused = false;
 				want_resume = true;
 				break;
-			default:
+			case 'O':
+				want_opacity_query = (optarg == NULL);
+				opacity_arg = optarg;
+				break;
+			case '?':
+				if (optopt == 'O') {
+					want_opacity_query = true;
+					break;
+				}
 				fprintf(stderr, "usage: wshowkeys [-b|-f|-s|-r #RRGGBB[AA]] [-F font] "
 						"[-t timeout]\n\t[-a top|left|right|bottom] [-m margin] "
-						"[-o output] [-l numOfLengthLimit] [-H padding] [-i] [-P] [-R]");
+						"[-o output] [-l numOfLengthLimit] [-H padding] [-i] [-P] [-R] [-O opacity]");
 				return 1;
 		}
+	}
+
+	if (opacity_arg) {
+		float val = strtof(opacity_arg, NULL);
+		if (val < 0.0f) val = 0.0f;
+		if (val > 1.0f) val = 1.0f;
+		state.opacity = val;
 	}
 
 	/* IPC socket setup for pause/resume */
@@ -1411,6 +1432,24 @@ int main(int argc, char *argv[]) {
 					close(state.sock_fd);
 					return 0;
 				}
+			if (opacity_arg || want_opacity_query) {
+				char cmd = 'O';
+				write(conn_fd, &cmd, 1);
+				if (opacity_arg) {
+					write(conn_fd, opacity_arg, strlen(opacity_arg));
+				}
+				char term = '\0';
+				write(conn_fd, &term, 1);
+				char buf[32] = {0};
+				ssize_t n = read(conn_fd, buf, sizeof(buf) - 1);
+				if (n > 0) {
+					buf[n] = '\0';
+					printf("%s", buf);
+				}
+				close(conn_fd);
+				close(state.sock_fd);
+				return 0;
+			}
 				fprintf(stderr, "wiv: already running, use wiv -P to pause or wiv -R to resume\n");
 				close(conn_fd);
 				close(state.sock_fd);
@@ -1731,6 +1770,44 @@ int main(int argc, char *argv[]) {
 						}
 					} else if (cmd == 'R') {
 						state.paused = false;
+					} else if (cmd == 'O') {
+						char argbuf[16] = {0};
+						ssize_t nr = read(client_fd, argbuf, sizeof(argbuf) - 1);
+						if (nr > 0) {
+							argbuf[nr] = '\0';
+							if (argbuf[0] == '\0') {
+								char resp[32];
+								int len = snprintf(resp, sizeof(resp), "%g", state.opacity);
+								write(client_fd, resp, len);
+							} else if (argbuf[0] == '+') {
+								state.opacity += strtof(argbuf + 1, NULL);
+								if (state.opacity > 1.0f) state.opacity = 1.0f;
+								if (state.opacity < 0.0f) state.opacity = 0.0f;
+								char resp[32];
+								int len = snprintf(resp, sizeof(resp), "%g", state.opacity);
+								write(client_fd, resp, len);
+								if (surface_is_configured(&state) && state.surface)
+									render_frame(&state);
+							} else if (argbuf[0] == '-') {
+								state.opacity -= strtof(argbuf + 1, NULL);
+								if (state.opacity > 1.0f) state.opacity = 1.0f;
+								if (state.opacity < 0.0f) state.opacity = 0.0f;
+								char resp[32];
+								int len = snprintf(resp, sizeof(resp), "%g", state.opacity);
+								write(client_fd, resp, len);
+								if (surface_is_configured(&state) && state.surface)
+									render_frame(&state);
+							} else {
+								state.opacity = strtof(argbuf, NULL);
+								if (state.opacity > 1.0f) state.opacity = 1.0f;
+								if (state.opacity < 0.0f) state.opacity = 0.0f;
+								char resp[32];
+								int len = snprintf(resp, sizeof(resp), "%g", state.opacity);
+								write(client_fd, resp, len);
+								if (surface_is_configured(&state) && state.surface)
+									render_frame(&state);
+							}
+						}
 					}
 				}
 				close(client_fd);
