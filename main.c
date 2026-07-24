@@ -212,41 +212,12 @@ static void render_to_cairo(cairo_t *cairo, struct wsk_state *state, int scale, 
 	cairo_set_source_u32(cairo, state->background);
 	cairo_paint(cairo);
 
-	/* First pass: measure all keys to find max height */
-	int max_h = 0;
-	{
-		struct wsk_keypress *key = state->keys;
-		const char *prev_display = NULL;
-		while (key) {
-			if (key->is_repeat) {
-				key = key->next;
-				continue;
-			}
-
-			const KeymapEntry *entry = keymap_entry(key->name);
-			const char *display;
-
-			if (state->inspect) {
-				display = key->name;
-			} else if (entry) {
-				display = entry->display ? entry->display : (key->utf8[0] ? key->utf8 : key->name);
-			} else if (key->utf8[0]) {
-				display = key->utf8;
-			} else {
-				display = key->name;
-			}
-
-			const char *pad_before =
-				(prev_display && prev_display[strlen(prev_display) - 1] == '+') ? "" : KEY_PAD_BEFORE;
-
-			int w, h;
-			get_text_size(cairo, state->font, &w, &h, NULL, scale, "%s%s%s", pad_before, display, KEY_PAD_AFTER);
-			if (h > max_h)
-				max_h = h;
-
-			prev_display = display;
-			key = key->next;
-		}
+	/* Use font metrics for stable height — avoids per-glyph shifting */
+	int max_h = get_font_line_height(cairo, state->font, scale);
+	if (state->repeat_font) {
+		int repeat_h = get_font_line_height(cairo, state->repeat_font, scale);
+		if (repeat_h > max_h)
+			max_h = repeat_h;
 	}
 
 	/* Second pass: draw keys with vertical alignment offset */

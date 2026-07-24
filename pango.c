@@ -77,6 +77,18 @@ void pango_printf(cairo_t *cairo, const char *font, double scale,
 	free(buf);
 }
 
+int get_font_line_height(cairo_t *cairo, const char *font, double scale) {
+	PangoLayout *layout = get_pango_layout(cairo, font, "Xg", scale);
+	pango_cairo_update_layout(cairo, layout);
+	PangoContext *context = pango_layout_get_context(layout);
+	const PangoFontDescription *desc = pango_layout_get_font_description(layout);
+	PangoFontMetrics *metrics = pango_context_get_metrics(context, desc, NULL);
+	int height = (pango_font_metrics_get_ascent(metrics) + pango_font_metrics_get_descent(metrics)) / PANGO_SCALE;
+	pango_font_metrics_unref(metrics);
+	g_object_unref(layout);
+	return height;
+}
+
 char *scale_font_size(const char *font, double scale_factor) {
 	PangoFontDescription *desc = pango_font_description_from_string(font);
 	int size = pango_font_description_get_size(desc);
