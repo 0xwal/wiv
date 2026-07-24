@@ -19,6 +19,7 @@
 #define COLOR_BACKGROUND 0x00000000
 #define COLOR_SPECIAL_FG 0xebdbb240
 #define COLOR_FOREGROUND 0xebdbb2f0
+#define COLOR_REPEAT_FG 0xebdbb220
 
 #define DEFAULT_FONT "Sans Bold 40"
 #define DISPLAY_MIN_HEIGHT 100
@@ -91,6 +92,9 @@ static const KeymapEntry keymap[] = {
 	// K("7", "₇"),
 	// K("8", "₈"),
 	// K("9", "₉"),
+
+	// COLORS
+	// KC("l", "#ff0000")
 };
 #define KEYMAP_LEN (sizeof(keymap) / sizeof(keymap[0]))
 

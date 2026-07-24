@@ -78,7 +78,7 @@ struct wsk_state {
 	struct udev *udev;
 	struct libinput *libinput;
 
-	uint32_t foreground, background, specialfg;
+	uint32_t foreground, background, specialfg, repeatfg;
 	const char *font;
 	char *repeat_font;
 	int timeout;
@@ -268,7 +268,11 @@ static void render_to_cairo(cairo_t *cairo, struct wsk_state *state, int scale, 
 			color = state->foreground;
 		} else {
 			display = key->name;
-			color = state->specialfg;
+			color = state->foreground;
+		}
+
+		if (key->is_repeat) {
+			color = state->repeatfg;
 		}
 
 		const char *pad_before =
@@ -1282,6 +1286,7 @@ int main(int argc, char *argv[]) {
 	state.margin = 32;
 	state.background = COLOR_BACKGROUND;
 	state.specialfg = COLOR_SPECIAL_FG;
+	state.repeatfg = COLOR_REPEAT_FG;
 	state.foreground = COLOR_FOREGROUND;
 	state.font = DEFAULT_FONT;
 	state.timeout = 200;
@@ -1309,7 +1314,7 @@ int main(int argc, char *argv[]) {
 	state.sock_path[0] = '\0';
 
 	int c;
-	while ((c = getopt(argc, argv, "hib:f:s:F:t:a:m:o:l:D:H:PR")) != -1) {
+	while ((c = getopt(argc, argv, "hib:f:s:r:F:t:a:m:o:l:D:H:PR")) != -1) {
 		switch (c) {
 			case 'l':
 				state.length_limit = atoi(optarg);
@@ -1322,6 +1327,9 @@ int main(int argc, char *argv[]) {
 				break;
 			case 's':
 				state.specialfg = parse_color(optarg);
+				break;
+			case 'r':
+				state.repeatfg = parse_color(optarg);
 				break;
 			case 'F':
 				state.font = optarg;
@@ -1372,7 +1380,7 @@ int main(int argc, char *argv[]) {
 				want_resume = true;
 				break;
 			default:
-				fprintf(stderr, "usage: wshowkeys [-b|-f|-s #RRGGBB[AA]] [-F font] "
+				fprintf(stderr, "usage: wshowkeys [-b|-f|-s|-r #RRGGBB[AA]] [-F font] "
 						"[-t timeout]\n\t[-a top|left|right|bottom] [-m margin] "
 						"[-o output] [-l numOfLengthLimit] [-H padding] [-i] [-P] [-R]");
 				return 1;

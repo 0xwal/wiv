@@ -70,6 +70,7 @@ wiv [-b|-f|-s #RRGGBB[AA]] [-F font] [-t timeout]
 - *-b #RRGGBB[AA]*: set background color
 - *-f #RRGGBB[AA]*: set foreground color
 - *-s #RRGGBB[AA]*: set color for special keys
+- *-r #RRGGBB[AA]*: set color for repeat count symbols
 - *-F font*: set font (Pango format, e.g. 'monospace bold 24')
 - *-t timeout*: set timeout before clearing old keystrokes(ms)
 - *-a top|left|right|bottom*: anchor the keystrokes to an edge. May be specified
