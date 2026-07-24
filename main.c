@@ -22,6 +22,7 @@
 #include "shm.h"
 #include "pango.h"
 #include "keymap.h"
+#include "config.h"
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
 #include "xdg-output-unstable-v1-client-protocol.h"
 
@@ -227,17 +228,25 @@ static cairo_subpixel_order_t to_cairo_subpixel_order(enum wl_output_subpixel su
 static uint32_t parse_color(const char *color);
 
 static const KeymapEntry *keymap_entry(const char *name) {
-	/* exact match first */
+	const KeymapEntry *e = config_lookup(name);
+	if (e)
+		return e;
+
 	for (size_t i = 0; i < KEYMAP_LEN; i++)
 		if (!strcmp(keymap[i].name, name))
 			return &keymap[i];
-	/* try without _L or _R suffix */
+
 	size_t len = strlen(name);
 	if (len > 2 && name[len - 2] == '_' && (name[len - 1] == 'L' || name[len - 1] == 'R')) {
 		char base[128];
 		size_t base_len = len - 2;
 		memcpy(base, name, base_len);
 		base[base_len] = '\0';
+
+		e = config_lookup(base);
+		if (e)
+			return e;
+
 		for (size_t i = 0; i < KEYMAP_LEN; i++)
 			if (!strcmp(keymap[i].name, base))
 				return &keymap[i];
@@ -1191,6 +1200,7 @@ int main(int argc, char *argv[]) {
 	bool want_pause = false;
 	bool want_resume = false;
 	bool want_opacity_query = false;
+	bool validate_config = false;
 	const char *opacity_arg = NULL;
 
 	state.anchor = ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
@@ -1228,7 +1238,7 @@ int main(int argc, char *argv[]) {
 
 	int c;
 	opterr = 0;
-	while ((c = getopt(argc, argv, "hib:f:s:r:F:t:a:m:o:l:w::D:H:PRO::")) != -1) {
+	while ((c = getopt(argc, argv, "hibcf:s:r:F:t:a:m:o:l:w::D:H:PRO::")) != -1) {
 		switch (c) {
 			case 'l':
 				state.length_limit = (int) strtol(optarg, NULL, 10);
@@ -1300,13 +1310,21 @@ int main(int argc, char *argv[]) {
 				want_opacity_query = (optarg == NULL);
 				opacity_arg = optarg;
 				break;
+			case 'c':
+				validate_config = true;
+				break;
 			case '?':
 				fprintf(stderr, "usage: wshowkeys [-b|-f|-s|-r #RRGGBB[AA]] [-F font] "
 						"[-t timeout]\n\t[-a top|left|right|bottom] [-m margin] "
 						"[-o output] [-l numOfLengthLimit] [-w pixels] [-H padding] [-i] [-P] "
-						"[-R] [-O [opacity]]");
+						"[-c] [-R] [-O [opacity]]");
+				fprintf(stderr, "\n-c          validate keymap config and exit\n");
 				return 1;
 		}
+	}
+
+	if (validate_config) {
+		return config_validate() == 0 ? 0 : 1;
 	}
 
 	if (state.fixed_width != 0)
@@ -1425,6 +1443,8 @@ int main(int argc, char *argv[]) {
 			}
 		}
 	}
+
+	config_load();
 
 	state.repeat_font = scale_font_size(state.font, REPEAT_FONT_SCALE);
 
@@ -1823,6 +1843,7 @@ int main(int argc, char *argv[]) {
 		fclose(trace_file);
 	}
 #endif
+	config_free();
 	free(state.repeat_font);
 
 	/* Wayland / XKB / linked-list cleanup */

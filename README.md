@@ -53,7 +53,7 @@ After that, run `./build/wiv` directly — no root or setuid required.
 wiv [-b|-f|-s #RRGGBB[AA]] [-F font] [-t timeout]
     [-a top|left|right|bottom] [-m margin] [-l lenmax]
     [-o output] [-w [pixels]] [-i] [-H height] [-D trace] [-P] [-R]
-    [-O opacity]
+    [-O opacity] [-c]
 ```
 
 - *-b #RRGGBB[AA]*: set background color
@@ -83,6 +83,7 @@ wiv [-b|-f|-s #RRGGBB[AA]] [-F font] [-t timeout]
   - `wiv -O` — query current opacity (prints value and exits)
   - `wiv -O"+.1"` — increment opacity by 10%
   - `wiv -O"-.1"` — decrement opacity by 10%
+- *-c*: validate keymap config file and exit (prints `OK` or error with line number)
 
 **Environment:**
 - *WIV_MASK*: comma-separated key sequence patterns to suppress/sensitive
@@ -102,3 +103,45 @@ example:
 ```bash
 wiv -a bottom -F 'Sans Bold 30' -s '#B5B520ff' -f  '#ecd29cff' -b '#201B1488' -l 60 -w
 ```
+
+## Keymap Configuration
+
+wiv loads a keymap config file on startup to override built-in key display
+mappings. The file is loaded only when running as the primary instance.
+
+**Path:** `$XDG_CONFIG_HOME/wiv/keymap` (typically `~/.config/wiv/keymap`).
+Falls back to `~/.config/wiv/keymap` if `XDG_CONFIG_HOME` is not set.
+If the file doesn't exist, the built-in keymap is used unchanged.
+
+**Format:** one entry per line:
+
+```
+<key>|[display]|[color]
+```
+
+- `<key>`: xkb keysym name (e.g. `Return`, `space`, `KP_Enter`)
+- `[display]`: UTF-8 display text (optional, empty = use key name)
+- `[color]`: text color `#RRGGBB` or `#RRGGBBAA` (optional, empty = use global fg)
+
+Escape `|` with `\|` for a literal pipe. Use `\\` for a literal backslash.
+Lines starting with `#` are comments. Empty lines are ignored.
+
+**Examples:**
+
+```
+# modifier keys
+Return|⏎|
+space|␣|#ebdbb230
+KP_Enter|⏎|
+
+# override just color, keep default display
+l||#ff0000
+
+# override just display, keep default color
+Escape|⎌|
+
+# both NULL — no-op override
+BackSpace||
+```
+
+Use `wiv -c` to validate the config file without starting the application.

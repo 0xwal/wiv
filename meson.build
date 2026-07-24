@@ -59,6 +59,7 @@ subdir('protocols')
 executable(
 	'wiv',
 	files(
+		'config.c',
 		'devmgr.c',
 		'main.c',
 		'pango.c',
