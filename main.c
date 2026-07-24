@@ -1352,7 +1352,7 @@ int main(int argc, char *argv[]) {
 
 	state.repeat_font = scale_font_size(state.font, REPEAT_FONT_SCALE);
 
-	const char *mask_env = getenv("WSHOWKEYS_MASK");
+	const char *mask_env = getenv("WIV_MASK");
 	if (mask_env) {
 		char *env_copy = strdup(mask_env);
 		if (env_copy) {

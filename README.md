@@ -1,4 +1,4 @@
-# wshowkeys
+# wiv — Wayland Input Visual
 
 Displays keypresses on screen on supported Wayland compositors (requires
 `wlr_layer_shell_v1` support).
@@ -12,7 +12,7 @@ https://github.com/DreamMaoMao/myshowkey/assets/30348075/944d9e92-ea6f-4017-9b50
 
 
 
-Forked from https://git.sr.ht/~sircmpwn/wshowkeys as Drew has moved onto other thigns.
+Forked from https://git.sr.ht/~sircmpwn/wshowkeys — wiv is a continuation.
 
 ## Installation
 
@@ -39,7 +39,7 @@ $ ninja -C build
 
 ### permissions
 
-wshowkeys reads `/dev/input/` devices to capture keypresses.
+wiv reads `/dev/input/` devices to capture keypresses.
 Add your user to the `input` group:
 
 ```bash
@@ -48,12 +48,12 @@ sudo usermod -aG input $USER
 
 Then **log out and back in** for the change to take effect.
 
-After that, run `./build/wshowkeys` directly — no root or setuid required.
+After that, run `./build/wiv` directly — no root or setuid required.
 
 ## Usage
 
 ```
-wshowkeys [-b|-f|-s #RRGGBB[AA]] [-F font] [-t timeout]
+wiv [-b|-f|-s #RRGGBB[AA]] [-F font] [-t timeout]
     [-a top|left|right|bottom] [-m margin] [-o output]
 ```
 
@@ -71,5 +71,5 @@ wshowkeys [-b|-f|-s #RRGGBB[AA]] [-F font] [-t timeout]
 
 example:
 ```bash
-wshowkeys -a bottom -F 'Sans Bold 30' -s '#B5B520ff' -f  '#ecd29cff' -b '#201B1488' -l 60
+wiv -a bottom -F 'Sans Bold 30' -s '#B5B520ff' -f  '#ecd29cff' -b '#201B1488' -l 60
 ```

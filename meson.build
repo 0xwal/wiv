@@ -1,5 +1,5 @@
 project(
-	'wshowkeys',
+	'wiv',
 	'c',
 	version: '0.1.0',
 	license: 'GPL',
@@ -56,7 +56,7 @@ rt = cc.find_library('rt')
 subdir('protocols')
 
 executable(
-	'wshowkeys',
+	'wiv',
 	files(
 		'devmgr.c',
 		'main.c',
