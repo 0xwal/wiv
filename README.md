@@ -12,14 +12,9 @@ https://github.com/DreamMaoMao/myshowkey/assets/30348075/944d9e92-ea6f-4017-9b50
 
 
 
-Forked from https://git.sr.ht/~sircmpwn/wshowkeys — wiv is a continuation.
+Forked from [~sircmpwn/wshowkeys](https://git.sr.ht/~sircmpwn/wshowkeys) | [DreamMaoMao/wshowkeys](https://github.com/DreamMaoMao/wshowkeys) — wiv is a continuation. credits goes to them
 
 ## Installation
-
-### arch
-```bash
-yay -S wshowkeys-mao-git
-```
 
 ### nix
 ```bash
