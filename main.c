@@ -14,6 +14,8 @@
 #include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <wayland-client.h>
 #include <xkbcommon/xkbcommon.h>
 #include "devmgr.h"
@@ -125,6 +127,9 @@ struct wsk_state {
 	struct timespec last_repeat_time;
 	char repeat_state; /* 0=idle, 1=delayed (past initial 400ms), 2=active (repeating) */
 	bool resize_pending;
+	int sock_fd;
+	bool paused;
+	char sock_path[256];
 	bool dirty;
 	struct pool_buffer buffer_pool[2];
 	cairo_surface_t *recording;
@@ -1252,6 +1257,16 @@ void clear_full_keylink(struct wsk_keypress *key, struct wsk_state *state) {
 	set_dirty(state);
 }
 
+static const char *get_sock_path(char *buf, size_t bufsize) {
+	const char *dir = getenv("XDG_RUNTIME_DIR");
+	if (dir) {
+		snprintf(buf, bufsize, "%s/wiv.sock", dir);
+	} else {
+		snprintf(buf, bufsize, "/tmp/wiv.sock");
+	}
+	return buf;
+}
+
 int main(int argc, char *argv[]) {
 	struct wsk_state state = {0};
 	if (devmgr_start(&state.devmgr, &state.devmgr_pid, INPUTDEVPATH) > 0) {
@@ -1259,6 +1274,9 @@ int main(int argc, char *argv[]) {
 	}
 
 	int ret = 0;
+
+	bool want_pause = false;
+	bool want_resume = false;
 
 	state.anchor = ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
 	state.margin = 32;
@@ -1286,9 +1304,12 @@ int main(int argc, char *argv[]) {
 	state.inspect = false;
 	state.resize_pending = false;
 	state.last_was_release = true;
+	state.sock_fd = -1;
+	state.paused = false;
+	state.sock_path[0] = '\0';
 
 	int c;
-	while ((c = getopt(argc, argv, "hib:f:s:F:t:a:m:o:l:D:H:")) != -1) {
+	while ((c = getopt(argc, argv, "hib:f:s:F:t:a:m:o:l:D:H:PR")) != -1) {
 		switch (c) {
 			case 'l':
 				state.length_limit = atoi(optarg);
@@ -1342,11 +1363,99 @@ int main(int argc, char *argv[]) {
 			case 'H':
 				state.min_height = (uint32_t)atoi(optarg);
 				break;
+			case 'P':
+				state.paused = true;
+				want_pause = true;
+				break;
+			case 'R':
+				state.paused = false;
+				want_resume = true;
+				break;
 			default:
 				fprintf(stderr, "usage: wshowkeys [-b|-f|-s #RRGGBB[AA]] [-F font] "
 						"[-t timeout]\n\t[-a top|left|right|bottom] [-m margin] "
-						"[-o output] [-l numOfLengthLimit] [-H padding] [-i]");
+						"[-o output] [-l numOfLengthLimit] [-H padding] [-i] [-P] [-R]");
 				return 1;
+		}
+	}
+
+	/* IPC socket setup for pause/resume */
+	{
+		char path_buf[256];
+		const char *path = get_sock_path(path_buf, sizeof(path_buf));
+		strncpy(state.sock_path, path, sizeof(state.sock_path) - 1);
+		state.sock_path[sizeof(state.sock_path) - 1] = '\0';
+
+		state.sock_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+		if (state.sock_fd < 0) {
+			fprintf(stderr, "socket: %s\n", strerror(errno));
+			ret = 1;
+			goto exit;
+		}
+
+		struct sockaddr_un addr = {0};
+		addr.sun_family = AF_UNIX;
+		char buf[256];
+		snprintf(buf, sizeof(buf), "%s", path);
+		memcpy(addr.sun_path, buf, strlen(buf) + 1);
+
+		if (bind(state.sock_fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
+			if (listen(state.sock_fd, 5) < 0) {
+				fprintf(stderr, "listen: %s\n", strerror(errno));
+				close(state.sock_fd);
+				state.sock_fd = -1;
+				ret = 1;
+				goto exit;
+			}
+		} else {
+			/* Bind failed — check if another instance is running */
+			int conn_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+			if (conn_fd < 0) {
+				fprintf(stderr, "socket: %s\n", strerror(errno));
+				close(state.sock_fd);
+				state.sock_fd = -1;
+				ret = 1;
+				goto exit;
+			}
+			if (connect(conn_fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
+				if (want_pause) {
+					char cmd = 'P';
+					write(conn_fd, &cmd, 1);
+					close(conn_fd);
+					close(state.sock_fd);
+					return 0;
+				}
+				if (want_resume) {
+					char cmd = 'R';
+					write(conn_fd, &cmd, 1);
+					close(conn_fd);
+					close(state.sock_fd);
+					return 0;
+				}
+				fprintf(stderr, "wiv: already running, use wiv -P to pause or wiv -R to resume\n");
+				close(conn_fd);
+				close(state.sock_fd);
+				state.sock_fd = -1;
+				ret = 1;
+				goto exit;
+			}
+			close(conn_fd);
+			/* No other instance — stale socket, unlink and retry */
+			unlink(path);
+			if (bind(state.sock_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+				fprintf(stderr, "bind: %s\n", strerror(errno));
+				close(state.sock_fd);
+				state.sock_fd = -1;
+				ret = 1;
+				goto exit;
+			}
+			if (listen(state.sock_fd, 5) < 0) {
+				fprintf(stderr, "listen: %s\n", strerror(errno));
+				close(state.sock_fd);
+				state.sock_fd = -1;
+				ret = 1;
+				goto exit;
+			}
 		}
 	}
 
@@ -1463,16 +1572,23 @@ int main(int argc, char *argv[]) {
 	zwlr_layer_surface_v1_set_exclusive_zone(state.layer_surface, -1);
 	wl_surface_commit(state.surface);
 
-	struct pollfd pollfds[] = {
-		{
-			.fd = libinput_get_fd(state.libinput),
-			.events = POLLIN,
-		},
-		{
-			.fd = wl_display_get_fd(state.display),
-			.events = POLLIN,
-		},
+	struct pollfd pollfds[3];
+	int npollfds = 2;
+	pollfds[0] = (struct pollfd){
+		.fd = libinput_get_fd(state.libinput),
+		.events = POLLIN,
 	};
+	pollfds[1] = (struct pollfd){
+		.fd = wl_display_get_fd(state.display),
+		.events = POLLIN,
+	};
+	if (state.sock_fd >= 0) {
+		pollfds[2] = (struct pollfd){
+			.fd = state.sock_fd,
+			.events = POLLIN,
+		};
+		npollfds = 3;
+	}
 
 	state.run = true;
 	while (state.run) {
@@ -1485,13 +1601,15 @@ int main(int argc, char *argv[]) {
 		} while (errno == EAGAIN);
 
 		int timeout = -1;
-		if (state.keys) {
-			timeout = 200;
+		if (!state.paused) {
+			if (state.keys) {
+				timeout = 200;
+			}
+			if (state.key_held && (timeout == -1 || REPEAT_RATE < timeout))
+				timeout = REPEAT_RATE;  /* Wake up often during key hold */
 		}
-		if (state.key_held && (timeout == -1 || REPEAT_RATE < timeout))
-			timeout = REPEAT_RATE;  /* Wake up often during key hold */
 
-		if (poll(pollfds, sizeof(pollfds) / sizeof(pollfds[0]), timeout) < 0) {
+		if (poll(pollfds, npollfds, timeout) < 0) {
 			fprintf(stderr, "poll: %s\n", strerror(errno));
 			break;
 		}
@@ -1507,55 +1625,61 @@ int main(int argc, char *argv[]) {
 			fprintf(stderr, "poll fd error: Wayland fd revents=%#x\n", pollfds[1].revents);
 			break;
 		}
+		if (npollfds == 3 && (pollfds[2].revents & (POLLHUP | POLLERR | POLLNVAL))) {
+			fprintf(stderr, "poll fd error: IPC socket revents=%#x\n", pollfds[2].revents);
+			break;
+		}
 
-		/* Clear out old keys */
-		struct timespec now;
-		struct wsk_keypress *key = state.keys;
-		int all_key_len = 0;
+		if (!state.paused) {
+			/* Clear out old keys */
+			struct timespec now;
+			struct wsk_keypress *key = state.keys;
+			int all_key_len = 0;
 
-		clock_gettime(CLOCK_MONOTONIC, &now);
-		long elapsed_ns =
-			(now.tv_sec - state.last_key.tv_sec) * 1000000000L + (now.tv_nsec - state.last_key.tv_nsec);
-		WSK_TRACE("timeout check: last_was_release=%d elapsed_ms=%ld timeout=%d keys=%p",
-			state.last_was_release, elapsed_ns / 1000000, state.timeout, (void*)key);
-		if (state.last_was_release && elapsed_ns > (long) state.timeout * 1000000L) {
-			if (state.keys) {
-				clear_full_keylink(key, &state);
-				for (int i = 0; i < state.mask.buffer_len; i++)
-					free(state.mask.buffer[i]);
-				mask_reset(&state.mask);
-			}
-		} else {
-			const char *prev_display = NULL;
-			while (key) {
-				const char *display;
-				if (state.inspect) {
-					display = key->name;
-				} else {
-					const KeymapEntry *entry = keymap_entry(key->name);
-					if (entry) {
-						display = entry->display ? entry->display
-									 : (key->utf8[0] ? key->utf8 : key->name);
-					} else if (key->utf8[0]) {
-						display = key->utf8;
-					} else {
-						display = key->name;
-					}
+			clock_gettime(CLOCK_MONOTONIC, &now);
+			long elapsed_ns =
+				(now.tv_sec - state.last_key.tv_sec) * 1000000000L + (now.tv_nsec - state.last_key.tv_nsec);
+			WSK_TRACE("timeout check: last_was_release=%d elapsed_ms=%ld timeout=%d keys=%p",
+				state.last_was_release, elapsed_ns / 1000000, state.timeout, (void*)key);
+			if (state.last_was_release && elapsed_ns > (long) state.timeout * 1000000L) {
+				if (state.keys) {
+					clear_full_keylink(key, &state);
+					for (int i = 0; i < state.mask.buffer_len; i++)
+						free(state.mask.buffer[i]);
+					mask_reset(&state.mask);
 				}
-				const char *pad_before = (prev_display && prev_display[strlen(prev_display) - 1] == '+')
-								 ? ""
-								 : KEY_PAD_BEFORE;
-				all_key_len += strlen(pad_before) + strlen(display) + strlen(KEY_PAD_AFTER);
-				prev_display = display;
-				struct wsk_keypress *next = key->next;
-				key = next;
-			}
-			if (all_key_len > state.length_limit) {
-				key = state.keys;
-				struct wsk_keypress *next = key->next;
-				free(key);
-				state.keys = next;
-				set_dirty(&state);
+			} else {
+				const char *prev_display = NULL;
+				while (key) {
+					const char *display;
+					if (state.inspect) {
+						display = key->name;
+					} else {
+						const KeymapEntry *entry = keymap_entry(key->name);
+						if (entry) {
+							display = entry->display ? entry->display
+										 : (key->utf8[0] ? key->utf8 : key->name);
+						} else if (key->utf8[0]) {
+							display = key->utf8;
+						} else {
+							display = key->name;
+						}
+					}
+					const char *pad_before = (prev_display && prev_display[strlen(prev_display) - 1] == '+')
+									 ? ""
+									 : KEY_PAD_BEFORE;
+					all_key_len += strlen(pad_before) + strlen(display) + strlen(KEY_PAD_AFTER);
+					prev_display = display;
+					struct wsk_keypress *next = key->next;
+					key = next;
+				}
+				if (all_key_len > state.length_limit) {
+					key = state.keys;
+					struct wsk_keypress *next = key->next;
+					free(key);
+					state.keys = next;
+					set_dirty(&state);
+				}
 			}
 		}
 
@@ -1566,35 +1690,39 @@ int main(int argc, char *argv[]) {
 			}
 			struct libinput_event *event;
 			while ((event = libinput_get_event(state.libinput))) {
-				handle_libinput_event(&state, event);
+				if (!state.paused) {
+					handle_libinput_event(&state, event);
+				}
 				libinput_event_destroy(event);
 				WSK_TRACE("libinput event processed");
 			}
 		}
 
-		/* Synthetic repeat for held key (libinput drops kernel auto-repeat) */
-		if (state.key_held && state.prev_combination_keye[0] != '\0') {
-			struct timespec now;
-			clock_gettime(CLOCK_MONOTONIC, &now);
-			long elapsed_ms = (now.tv_sec - state.last_key.tv_sec) * 1000L
-					+ (now.tv_nsec - state.last_key.tv_nsec) / 1000000L;
+		if (!state.paused) {
+			/* Synthetic repeat for held key (libinput drops kernel auto-repeat) */
+			if (state.key_held && state.prev_combination_keye[0] != '\0') {
+				struct timespec now;
+				clock_gettime(CLOCK_MONOTONIC, &now);
+				long elapsed_ms = (now.tv_sec - state.last_key.tv_sec) * 1000L
+						+ (now.tv_nsec - state.last_key.tv_nsec) / 1000000L;
 
-			if (elapsed_ms >= REPEAT_DELAY) {
-				if (state.repeat_state == 0) {
-					state.repeat_state = 1;
-					state.last_repeat_time = now;
-				}
-				if (state.repeat_state == 1) {
-					/* First repeat after delay */
-					state.repeat_state = 2;
-					state.last_repeat_time = now;
-					generate_held_key_repeat(&state);
-				} else if (state.repeat_state == 2) {
-					long repeat_elapsed = (now.tv_sec - state.last_repeat_time.tv_sec) * 1000L
-								+ (now.tv_nsec - state.last_repeat_time.tv_nsec) / 1000000L;
-					if (repeat_elapsed >= REPEAT_RATE) {
+				if (elapsed_ms >= REPEAT_DELAY) {
+					if (state.repeat_state == 0) {
+						state.repeat_state = 1;
+						state.last_repeat_time = now;
+					}
+					if (state.repeat_state == 1) {
+						/* First repeat after delay */
+						state.repeat_state = 2;
 						state.last_repeat_time = now;
 						generate_held_key_repeat(&state);
+					} else if (state.repeat_state == 2) {
+						long repeat_elapsed = (now.tv_sec - state.last_repeat_time.tv_sec) * 1000L
+									+ (now.tv_nsec - state.last_repeat_time.tv_nsec) / 1000000L;
+						if (repeat_elapsed >= REPEAT_RATE) {
+							state.last_repeat_time = now;
+							generate_held_key_repeat(&state);
+						}
 					}
 				}
 			}
@@ -1609,12 +1737,35 @@ int main(int argc, char *argv[]) {
 			}
 		}
 
-		WSK_TRACE("pre-render dirty=%d configured=%d keys=%p",
-			state.dirty, surface_is_configured(&state), (void*)state.keys);
-		if (state.dirty) {
-			state.dirty = false;
-			if (surface_is_configured(&state) && state.surface) {
-				render_frame(&state);
+		/* Handle IPC socket connections (pause/resume signaling) */
+		if (npollfds == 3 && (pollfds[2].revents & POLLIN)) {
+			int client_fd = accept(state.sock_fd, NULL, NULL);
+			if (client_fd >= 0) {
+				char cmd = 0;
+				ssize_t _nr = read(client_fd, &cmd, 1);
+				if (_nr == 1) {
+					if (cmd == 'P') {
+						clear_full_keylink(state.keys, &state);
+						state.paused = true;
+						if (surface_is_configured(&state) && state.surface) {
+							render_frame(&state);
+						}
+					} else if (cmd == 'R') {
+						state.paused = false;
+					}
+				}
+				close(client_fd);
+			}
+		}
+
+		if (!state.paused) {
+			WSK_TRACE("pre-render dirty=%d configured=%d keys=%p",
+				state.dirty, surface_is_configured(&state), (void*)state.keys);
+			if (state.dirty) {
+				state.dirty = false;
+				if (surface_is_configured(&state) && state.surface) {
+					render_frame(&state);
+				}
 			}
 		}
 	}
@@ -1638,6 +1789,10 @@ int main(int argc, char *argv[]) {
 #endif
 	free(state.repeat_font);
 exit:
+	if (state.sock_fd >= 0) {
+		close(state.sock_fd);
+	}
+	unlink(state.sock_path);
 	wl_display_disconnect(state.display);
 	libinput_unref(state.libinput);
 	devmgr_finish(state.devmgr, state.devmgr_pid);

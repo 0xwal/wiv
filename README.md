@@ -64,7 +64,7 @@ After that, run `./build/wiv` directly — no root or setuid required.
 ```
 wiv [-b|-f|-s #RRGGBB[AA]] [-F font] [-t timeout]
     [-a top|left|right|bottom] [-m margin] [-l lenmax]
-    [-o output] [-i] [-H height] [-D trace]
+    [-o output] [-i] [-H height] [-D trace] [-P] [-R]
 ```
 
 - *-b #RRGGBB[AA]*: set background color
@@ -79,11 +79,18 @@ wiv [-b|-f|-s #RRGGBB[AA]] [-F font] [-t timeout]
 - *-o output*: show only on the specified monitor by name ex: -o eDP-1
 - *-i*: inspect mode — show raw xkb keysym names instead of pretty-printed display names
 - *-H height*: vertical padding per key row in px (added above/below text, default: 100)
+- *-P*: pause — start paused or pause an already-running instance
+- *-R*: resume — start normally or resume an already-running instance
 - *-D trace*: trace file path for debug logging (debug build only)
 
 **Environment:**
 - *WIV_MASK*: comma-separated key sequence patterns to suppress/sensitive
   input masking
+
+**Pause/Resume:**
+wiv is a single-instance application. Running `wiv` a second time fails.
+Use `wiv -P` to pause a running instance (clears displayed keys, freezes
+the overlay with near-zero CPU usage). Use `wiv -R` to resume it.
 
 example:
 ```bash
