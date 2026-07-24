@@ -395,6 +395,41 @@ static void set_dirty(struct wsk_state *state) {
 	state->dirty = true;
 }
 
+#ifdef WSK_DEBUG
+static void debug_print_display(struct wsk_state *state) {
+	fprintf(trace_file, "[display] ");
+	struct wsk_keypress *key = state->keys;
+	if (!key) {
+		fprintf(trace_file, "(empty)");
+		fflush(trace_file);
+		return;
+	}
+	int count = 0;
+	while (key) {
+		const char *display;
+		const KeymapEntry *entry = keymap_entry(key->name);
+		if (state->inspect) {
+			display = key->name;
+		} else if (entry && entry->display) {
+			display = entry->display;
+		} else if (key->utf8[0]) {
+			display = key->utf8;
+		} else {
+			display = key->name;
+		}
+		if (key->is_repeat) {
+			fprintf(trace_file, "‹%s›", display);
+		} else {
+			fprintf(trace_file, "%s", display);
+		}
+		count++;
+		key = key->next;
+	}
+	fprintf(trace_file, "  [%d nodes]", count);
+	fflush(trace_file);
+}
+#endif
+
 static void layer_surface_configure(void *data, struct zwlr_layer_surface_v1 *zwlr_layer_surface_v1, uint32_t serial,
 				    uint32_t width, uint32_t height) {
 	struct wsk_state *state = data;
@@ -1115,6 +1150,9 @@ static void handle_libinput_event(struct wsk_state *state, struct libinput_event
 	state->last_was_release = (key_state == LIBINPUT_KEY_STATE_RELEASED);
 	clock_gettime(CLOCK_MONOTONIC, &state->last_key);
 	set_dirty(state);
+#ifdef WSK_DEBUG
+	debug_print_display(state);
+#endif
 }
 
 static int libinput_open_restricted(const char *path, int flags, void *data) {
@@ -1153,6 +1191,10 @@ static uint32_t parse_color(const char *color) {
 
 void clear_full_keylink(struct wsk_keypress *key, struct wsk_state *state) {
 	WSK_TRACE("clear_full_keylink");
+#ifdef WSK_DEBUG
+	printf("\n");
+	fflush(stdout);
+#endif
 	if (!key) {
 		return;
 	}
