@@ -78,6 +78,7 @@ struct wsk_state {
 
 	uint32_t foreground, background, specialfg;
 	const char *font;
+	char *repeat_font;
 	int timeout;
 	int length_limit;
 	uint32_t min_height;
@@ -265,8 +266,9 @@ static void render_to_cairo(cairo_t *cairo, struct wsk_state *state, int scale, 
 		const char *pad_before =
 			(prev_display && prev_display[strlen(prev_display) - 1] == '+') ? "" : KEY_PAD_BEFORE;
 
+		const char *use_font = key->is_repeat ? state->repeat_font : state->font;
 		int w, h;
-		get_text_size(cairo, state->font, &w, &h, NULL, scale, "%s%s%s", pad_before, display, KEY_PAD_AFTER);
+		get_text_size(cairo, use_font, &w, &h, NULL, scale, "%s%s%s", pad_before, display, KEY_PAD_AFTER);
 
 		int target_h = max_h + (int)state->min_height;
 
@@ -279,7 +281,7 @@ static void render_to_cairo(cairo_t *cairo, struct wsk_state *state, int scale, 
 
 		cairo_set_source_u32(cairo, color);
 		cairo_move_to(cairo, *width, y_offset);
-		pango_printf(cairo, state->font, scale, "%s%s%s", pad_before, display, KEY_PAD_AFTER);
+		pango_printf(cairo, use_font, scale, "%s%s%s", pad_before, display, KEY_PAD_AFTER);
 
 		*width += w;
 		if ((int) *height < target_h)
@@ -1260,6 +1262,8 @@ int main(int argc, char *argv[]) {
 		}
 	}
 
+	state.repeat_font = scale_font_size(state.font, REPEAT_FONT_SCALE);
+
 	const char *mask_env = getenv("WSHOWKEYS_MASK");
 	if (mask_env) {
 		char *env_copy = strdup(mask_env);
@@ -1514,6 +1518,7 @@ int main(int argc, char *argv[]) {
 		fclose(trace_file);
 	}
 #endif
+	free(state.repeat_font);
 exit:
 	wl_display_disconnect(state.display);
 	libinput_unref(state.libinput);

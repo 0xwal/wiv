@@ -22,6 +22,7 @@
 
 #define DEFAULT_FONT "Sans Bold 40"
 #define DISPLAY_MIN_HEIGHT 100
+#define REPEAT_FONT_SCALE 0.5
 #define TEXT_ALIGN_CENTER
 
 typedef struct {
@@ -41,7 +42,7 @@ typedef struct {
 static const KeymapEntry keymap[] = {
 	// K("Return",    "⏎"),
 	K("Return",    "⮐"),
-	K("space",     "␣"),
+	K("space",     "␣", "#ebdbb230"),
 	K("Escape",    "⎌"), // ␛
 	K("Control",   "⎈"),
 	K("Alt",       "✵"),

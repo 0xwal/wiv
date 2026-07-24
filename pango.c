@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "pango.h"
 #include "cairo.h"
 
 PangoLayout *get_pango_layout(cairo_t *cairo, const char *font,
@@ -74,4 +75,13 @@ void pango_printf(cairo_t *cairo, const char *font, double scale,
 	pango_cairo_show_layout(cairo, layout);
 	g_object_unref(layout);
 	free(buf);
+}
+
+char *scale_font_size(const char *font, double scale_factor) {
+	PangoFontDescription *desc = pango_font_description_from_string(font);
+	int size = pango_font_description_get_size(desc);
+	pango_font_description_set_size(desc, (int)(size * scale_factor));
+	char *result = strdup(pango_font_description_to_string(desc));
+	pango_font_description_free(desc);
+	return result;
 }

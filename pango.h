@@ -13,4 +13,6 @@ void get_text_size(cairo_t *cairo, const char *font, int *width, int *height,
 void pango_printf(cairo_t *cairo, const char *font,
 		double scale, const char *fmt, ...);
 
+char *scale_font_size(const char *font, double scale_factor);
+
 #endif
