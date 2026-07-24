@@ -21,6 +21,11 @@ Forked from https://git.sr.ht/~sircmpwn/wshowkeys — wiv is a continuation.
 yay -S wshowkeys-mao-git
 ```
 
+### nix
+```bash
+nix run github:0xWal/wiv
+```
+
 ### building from source
 
 Dependencies:
@@ -36,6 +41,10 @@ Dependencies:
 $ meson build
 $ ninja -C build
 ```
+
+Build options:
+- `-Ddevpath=` — set device path for input capture
+- `-Dwsk_debug=true` — enable debug logging (requires debug build)
 
 ### permissions
 
@@ -54,20 +63,27 @@ After that, run `./build/wiv` directly — no root or setuid required.
 
 ```
 wiv [-b|-f|-s #RRGGBB[AA]] [-F font] [-t timeout]
-    [-a top|left|right|bottom] [-m margin] [-o output]
+    [-a top|left|right|bottom] [-m margin] [-l lenmax]
+    [-o output] [-i] [-H height] [-D trace]
 ```
 
 - *-b #RRGGBB[AA]*: set background color
 - *-f #RRGGBB[AA]*: set foreground color
 - *-s #RRGGBB[AA]*: set color for special keys
-- *-F font*: set font (Pango format, e.g. 'monospace 24')
+- *-F font*: set font (Pango format, e.g. 'monospace bold 24')
 - *-t timeout*: set timeout before clearing old keystrokes(ms)
 - *-a top|left|right|bottom*: anchor the keystrokes to an edge. May be specified
   twice.
 - *-m margin*: set a margin (in pixels) from the nearest edge
 - *-l lenmax*: set the key layer lenmax
-- *-o output*: request wshowkeys is shown on the specified output
-  (unimplemented)
+- *-o output*: show only on the specified monitor by name ex: -o eDP-1
+- *-i*: inspect mode — show raw xkb keysym names instead of pretty-printed display names
+- *-H height*: vertical padding per key row in px (added above/below text, default: 100)
+- *-D trace*: trace file path for debug logging (debug build only)
+
+**Environment:**
+- *WIV_MASK*: comma-separated key sequence patterns to suppress/sensitive
+  input masking
 
 example:
 ```bash
