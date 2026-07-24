@@ -121,6 +121,9 @@ struct wsk_state {
 	char prev_combination_keye[128];
 
 	int combination_keye_repetition;
+	bool key_held;
+	struct timespec last_repeat_time;
+	char repeat_state; /* 0=idle, 1=delayed (past initial 400ms), 2=active (repeating) */
 	bool resize_pending;
 	bool dirty;
 	struct pool_buffer buffer_pool[2];
@@ -666,7 +669,7 @@ static int caculat_del_charnum_of_int(int num) {
 		num /= 10;
 		++count;
 	}
-	return count + 2;
+	return count + 1;
 }
 
 static int caculat_add_charnum_of_int(int num) {
@@ -676,7 +679,7 @@ static int caculat_add_charnum_of_int(int num) {
 		num /= 10;
 		++count;
 	}
-	return count + 1;
+	return count;
 }
 
 
@@ -735,6 +738,19 @@ static void attach_repeat_flag(struct wsk_state *state, int num, int num_len) {
 	}
 
 	free(repeat_num_char);
+}
+
+/* Generate a synthetic repeat for a held key */
+static void generate_held_key_repeat(struct wsk_state *state) {
+	int del_charnum = caculat_del_charnum_of_int(state->combination_keye_repetition);
+	if (state->combination_keye_repetition > 2)
+		del_last_key(state, del_charnum);
+	state->combination_keye_repetition++;
+	if (state->combination_keye_repetition > 2) {
+		int add_charnum = caculat_add_charnum_of_int(state->combination_keye_repetition);
+		attach_repeat_flag(state, state->combination_keye_repetition, add_charnum);
+	}
+	set_dirty(state);
 }
 
 static int pattern_char_matches(char pchar, struct wsk_keypress *kp) {
@@ -1056,81 +1072,38 @@ static void handle_libinput_event(struct wsk_state *state, struct libinput_event
 				int special_key_num = 0;
 				memset(state->current_combination_key, 0, sizeof(state->current_combination_key));
 
-				if (state->shift_l_hold) {
-					struct wsk_keypress *temp_keypress = calloc(1, sizeof(struct wsk_keypress));
-					strcpy(temp_keypress->name, "Shift_L");
+				// Build combo string (just string, no nodes yet)
+				if (state->shift_l_hold)
 					strcat(state->current_combination_key, "Shift_L");
-					special_key_num++;
-					*link = temp_keypress;
-					link = &(*link)->next;
-				}
-				if (state->shift_r_hold) {
-					struct wsk_keypress *temp_keypress = calloc(1, sizeof(struct wsk_keypress));
-					strcpy(temp_keypress->name, "Shift_R");
+				if (state->shift_r_hold)
 					strcat(state->current_combination_key, "Shift_R");
-					special_key_num++;
-					*link = temp_keypress;
-					link = &(*link)->next;
-				}
-				if (state->ctrl_l_hold) {
-					struct wsk_keypress *temp_keypress = calloc(1, sizeof(struct wsk_keypress));
-					strcpy(temp_keypress->name, "Control_L");
+				if (state->ctrl_l_hold)
 					strcat(state->current_combination_key, "Control_L");
-					special_key_num++;
-					*link = temp_keypress;
-					link = &(*link)->next;
-				}
-				if (state->ctrl_r_hold) {
-					struct wsk_keypress *temp_keypress = calloc(1, sizeof(struct wsk_keypress));
-					strcpy(temp_keypress->name, "Control_R");
+				if (state->ctrl_r_hold)
 					strcat(state->current_combination_key, "Control_R");
-					special_key_num++;
-					*link = temp_keypress;
-					link = &(*link)->next;
-				}
-				if (state->super_l_hold) {
-					struct wsk_keypress *temp_keypress = calloc(1, sizeof(struct wsk_keypress));
-					strcpy(temp_keypress->name, "Super_L");
+				if (state->super_l_hold)
 					strcat(state->current_combination_key, "Super_L");
-					special_key_num++;
-					*link = temp_keypress;
-					link = &(*link)->next;
-				}
-				if (state->supre_r_hold) {
-					struct wsk_keypress *temp_keypress = calloc(1, sizeof(struct wsk_keypress));
-					strcpy(temp_keypress->name, "Super_R");
+				if (state->supre_r_hold)
 					strcat(state->current_combination_key, "Super_R");
-					special_key_num++;
-					*link = temp_keypress;
-					link = &(*link)->next;
-				}
-				if (state->alt_l_hold) {
-					struct wsk_keypress *temp_keypress = calloc(1, sizeof(struct wsk_keypress));
-					strcpy(temp_keypress->name, "Alt_L");
+				if (state->alt_l_hold)
 					strcat(state->current_combination_key, "Alt_L");
-					special_key_num++;
-					*link = temp_keypress;
-					link = &(*link)->next;
-				}
-				if (state->alt_r_hold) {
-					struct wsk_keypress *temp_keypress = calloc(1, sizeof(struct wsk_keypress));
-					strcpy(temp_keypress->name, "Alt_R");
+				if (state->alt_r_hold)
 					strcat(state->current_combination_key, "Alt_R");
-					special_key_num++;
-					*link = temp_keypress;
-					link = &(*link)->next;
-				}
-
-				*link = keypress;
 				strcat(state->current_combination_key, keypress->name);
-				special_key_num++;
 
 				if (strcmp(state->prev_combination_keye, "") != 0 &&
 				    strcmp(state->prev_combination_keye, state->current_combination_key) == 0) {
-					int del_charnum =
-						caculat_del_charnum_of_int(state->combination_keye_repetition);
-					if (state->combination_keye_repetition > 2)
-						del_last_key(state, special_key_num + del_charnum);
+					// === REPEAT PATH ===
+					if (state->combination_keye_repetition < 2) {
+						// 2nd press: add key node (no counter yet)
+						*link = keypress;
+					} else {
+						// 3rd+ press: counter shows, don't add key node
+						free(keypress);
+						if (state->combination_keye_repetition > 2)
+							del_last_key(state,
+								caculat_del_charnum_of_int(state->combination_keye_repetition));
+					}
 					state->combination_keye_repetition++;
 					if (state->combination_keye_repetition > 2) {
 						int add_charnum =
@@ -1139,12 +1112,81 @@ static void handle_libinput_event(struct wsk_state *state, struct libinput_event
 								   add_charnum);
 					}
 				} else {
+					// === FIRST PRESS PATH: add modifier nodes + main key ===
+					if (state->shift_l_hold) {
+						struct wsk_keypress *temp_keypress = calloc(1, sizeof(struct wsk_keypress));
+						strcpy(temp_keypress->name, "Shift_L");
+						special_key_num++;
+						*link = temp_keypress;
+						link = &(*link)->next;
+					}
+					if (state->shift_r_hold) {
+						struct wsk_keypress *temp_keypress = calloc(1, sizeof(struct wsk_keypress));
+						strcpy(temp_keypress->name, "Shift_R");
+						special_key_num++;
+						*link = temp_keypress;
+						link = &(*link)->next;
+					}
+					if (state->ctrl_l_hold) {
+						struct wsk_keypress *temp_keypress = calloc(1, sizeof(struct wsk_keypress));
+						strcpy(temp_keypress->name, "Control_L");
+						special_key_num++;
+						*link = temp_keypress;
+						link = &(*link)->next;
+					}
+					if (state->ctrl_r_hold) {
+						struct wsk_keypress *temp_keypress = calloc(1, sizeof(struct wsk_keypress));
+						strcpy(temp_keypress->name, "Control_R");
+						special_key_num++;
+						*link = temp_keypress;
+						link = &(*link)->next;
+					}
+					if (state->super_l_hold) {
+						struct wsk_keypress *temp_keypress = calloc(1, sizeof(struct wsk_keypress));
+						strcpy(temp_keypress->name, "Super_L");
+						special_key_num++;
+						*link = temp_keypress;
+						link = &(*link)->next;
+					}
+					if (state->supre_r_hold) {
+						struct wsk_keypress *temp_keypress = calloc(1, sizeof(struct wsk_keypress));
+						strcpy(temp_keypress->name, "Super_R");
+						special_key_num++;
+						*link = temp_keypress;
+						link = &(*link)->next;
+					}
+					if (state->alt_l_hold) {
+						struct wsk_keypress *temp_keypress = calloc(1, sizeof(struct wsk_keypress));
+						strcpy(temp_keypress->name, "Alt_L");
+						special_key_num++;
+						*link = temp_keypress;
+						link = &(*link)->next;
+					}
+					if (state->alt_r_hold) {
+						struct wsk_keypress *temp_keypress = calloc(1, sizeof(struct wsk_keypress));
+						strcpy(temp_keypress->name, "Alt_R");
+						special_key_num++;
+						*link = temp_keypress;
+						link = &(*link)->next;
+					}
+
+					*link = keypress;
+					special_key_num++;
+
 					memset(state->prev_combination_keye, 0, sizeof(state->prev_combination_keye));
 					strcat(state->prev_combination_keye, state->current_combination_key);
 					state->combination_keye_repetition = 1;
 				}
 			}
 			break;
+	}
+
+	/* Track physical key hold (for synthetic repeat timer) */
+	if (key_state == LIBINPUT_KEY_STATE_PRESSED) {
+		state->key_held = true;
+	} else if (key_state == LIBINPUT_KEY_STATE_RELEASED) {
+		state->key_held = false;
+		state->repeat_state = 0;
 	}
 
 	state->last_was_release = (key_state == LIBINPUT_KEY_STATE_RELEASED);
@@ -1235,6 +1277,10 @@ int main(int argc, char *argv[]) {
 	state.shift_l_hold = 0;
 	state.shift_r_hold = 0;
 	state.combination_keye_repetition = 1;
+	state.key_held = false;
+	state.last_repeat_time.tv_sec = 0;
+	state.last_repeat_time.tv_nsec = 0;
+	state.repeat_state = 0;
 	state.min_height = DISPLAY_MIN_HEIGHT;
 	state.mask = (struct mask_state) {0};
 	state.inspect = false;
@@ -1442,6 +1488,8 @@ int main(int argc, char *argv[]) {
 		if (state.keys) {
 			timeout = 200;
 		}
+		if (state.key_held && (timeout == -1 || REPEAT_RATE < timeout))
+			timeout = REPEAT_RATE;  /* Wake up often during key hold */
 
 		if (poll(pollfds, sizeof(pollfds) / sizeof(pollfds[0]), timeout) < 0) {
 			fprintf(stderr, "poll: %s\n", strerror(errno));
@@ -1521,6 +1569,34 @@ int main(int argc, char *argv[]) {
 				handle_libinput_event(&state, event);
 				libinput_event_destroy(event);
 				WSK_TRACE("libinput event processed");
+			}
+		}
+
+		/* Synthetic repeat for held key (libinput drops kernel auto-repeat) */
+		if (state.key_held && state.prev_combination_keye[0] != '\0') {
+			struct timespec now;
+			clock_gettime(CLOCK_MONOTONIC, &now);
+			long elapsed_ms = (now.tv_sec - state.last_key.tv_sec) * 1000L
+					+ (now.tv_nsec - state.last_key.tv_nsec) / 1000000L;
+
+			if (elapsed_ms >= REPEAT_DELAY) {
+				if (state.repeat_state == 0) {
+					state.repeat_state = 1;
+					state.last_repeat_time = now;
+				}
+				if (state.repeat_state == 1) {
+					/* First repeat after delay */
+					state.repeat_state = 2;
+					state.last_repeat_time = now;
+					generate_held_key_repeat(&state);
+				} else if (state.repeat_state == 2) {
+					long repeat_elapsed = (now.tv_sec - state.last_repeat_time.tv_sec) * 1000L
+								+ (now.tv_nsec - state.last_repeat_time.tv_nsec) / 1000000L;
+					if (repeat_elapsed >= REPEAT_RATE) {
+						state.last_repeat_time = now;
+						generate_held_key_repeat(&state);
+					}
+				}
 			}
 		}
 
