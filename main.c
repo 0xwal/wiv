@@ -115,14 +115,14 @@ struct wsk_state {
 	int alt_l_hold;
 	int alt_r_hold;
 	int super_l_hold;
-	int supre_r_hold;
+	int super_r_hold;
 	int shift_l_hold;
 	int shift_r_hold;
 
 	char current_combination_key[128];
-	char prev_combination_keye[128];
+	char prev_combination_key[128];
 
-	int combination_keye_repetition;
+	int combination_key_repetition;
 	bool key_held;
 	struct timespec last_repeat_time;
 	char repeat_state; /* 0=idle, 1=delayed (past initial 400ms), 2=active (repeating) */
@@ -162,6 +162,60 @@ struct wsk_state {
 /*   sprintf(cmd, "echo '%x' >> ~/log", num); */
 /*   system(cmd); */
 /* } */
+
+static int find_modifier(const char *name) {
+	static const char *mod_names[] = {
+		"Control_L", "Control_R",
+		"Alt_L", "Meta_L",
+		"Alt_R", "Meta_R",
+		"Super_L", "Super_R",
+		"Shift_L", "Shift_R",
+	};
+	for (int i = 0; i < 10; i++)
+		if (strcmp(name, mod_names[i]) == 0)
+			return i;
+	return -1;
+}
+
+static int *modifier_hold_ptr(struct wsk_state *state, int idx) {
+	switch (idx) {
+		case 0: return &state->ctrl_l_hold;
+		case 1: return &state->ctrl_r_hold;
+		case 2: /* Alt_L */
+		case 3: /* Meta_L alias */
+			return &state->alt_l_hold;
+		case 4: /* Alt_R */
+		case 5: /* Meta_R alias */
+			return &state->alt_r_hold;
+		case 6: return &state->super_l_hold;
+		case 7: return &state->super_r_hold;
+		case 8: return &state->shift_l_hold;
+		case 9: return &state->shift_r_hold;
+	}
+	return NULL;
+}
+
+static const char *modifier_display_name(int idx) {
+	static const char *names[] = {
+		"Control_L", "Control_R",
+		"Alt_L", "Alt_L",
+		"Alt_R", "Alt_R",
+		"Super_L", "Super_R",
+		"Shift_L", "Shift_R",
+	};
+	if (idx >= 0 && idx < 10)
+		return names[idx];
+	return NULL;
+}
+
+static void *safe_calloc(size_t nmemb, size_t size) {
+	void *ptr = calloc(nmemb, size);
+	if (!ptr && nmemb && size) {
+		fprintf(stderr, "out of memory\n");
+		abort();
+	}
+	return ptr;
+}
 
 static void cairo_set_source_u32(cairo_t *cairo, uint32_t color, float opacity) {
 	cairo_set_source_rgba(cairo, (color >> (3 * 8) & 0xFF) / 255.0,
@@ -248,8 +302,9 @@ static void render_to_cairo(cairo_t *cairo, struct wsk_state *state, int scale, 
 			color = state->repeatfg;
 		}
 
+		size_t prev_len = prev_display ? strlen(prev_display) : 0;
 		const char *pad_before =
-			(prev_display && prev_display[strlen(prev_display) - 1] == '+') ? "" : KEY_PAD_BEFORE;
+			(prev_len > 0 && prev_display[prev_len - 1] == '+') ? "" : KEY_PAD_BEFORE;
 
 		const char *use_font = key->is_repeat ? state->repeat_font : state->font;
 		int w, h;
@@ -439,10 +494,13 @@ static const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
 static void surface_enter(void *data, struct wl_surface *wl_surface, struct wl_output *output) {
 	struct wsk_state *state = data;
 	struct wsk_output *wsk_output = state->outputs;
-	while (wsk_output->output != output) {
+	while (wsk_output) {
+		if (wsk_output->output == output) {
+			state->output = wsk_output;
+			return;
+		}
 		wsk_output = wsk_output->next;
 	}
-	state->output = wsk_output;
 }
 
 static void surface_leave(void *data, struct wl_surface *wl_surface, struct wl_output *output) {
@@ -472,6 +530,11 @@ static void keyboard_keymap(void *data, struct wl_keyboard *wl_keyboard, uint32_
 							       XKB_KEYMAP_COMPILE_NO_FLAGS);
 	munmap(map_shm, size);
 	close(fd);
+
+	if (!keymap) {
+		fprintf(stderr, "Failed to parse XKB keymap from compositor\n");
+		return;
+	}
 
 	struct xkb_state *xkb_state = xkb_state_new(keymap);
 	xkb_keymap_unref(state->xkb_keymap);
@@ -612,7 +675,7 @@ static void registry_global(void *data, struct wl_registry *wl_registry, uint32_
 	} else if (strcmp(interface, zwlr_layer_shell_v1_interface.name) == 0) {
 		state->layer_shell = wl_registry_bind(wl_registry, name, &zwlr_layer_shell_v1_interface, 1);
 	} else if (strcmp(interface, wl_output_interface.name) == 0) {
-		struct wsk_output *output = calloc(1, sizeof(struct wsk_output));
+		struct wsk_output *output = safe_calloc(1, sizeof(struct wsk_output));
 		output->output = wl_registry_bind(wl_registry, name, &wl_output_interface, 3);
 		output->scale = 1;
 		output->name[0] = '\0';
@@ -640,7 +703,7 @@ static const struct wl_registry_listener registry_listener = {
 	.global_remove = registry_global_remove,
 };
 
-static int caculat_del_charnum_of_int(int num) {
+static int calculate_del_charnum_of_int(int num) {
 	int count = 0;
 
 	if (num == 1) {
@@ -654,7 +717,7 @@ static int caculat_del_charnum_of_int(int num) {
 	return count + 1;
 }
 
-static int caculat_add_charnum_of_int(int num) {
+static int calculate_add_charnum_of_int(int num) {
 	int count = 0;
 
 	while (num != 0) {
@@ -703,17 +766,17 @@ static void change_numchar_to_special(char *target, char numchar) {
 }
 
 static void attach_repeat_flag(struct wsk_state *state, int num, int num_len) {
-	struct wsk_keypress *repeat_flag = calloc(1, sizeof(struct wsk_keypress));
+	struct wsk_keypress *repeat_flag = safe_calloc(1, sizeof(struct wsk_keypress));
 	strcpy(repeat_flag->name, REPEAT_MARKER);
 	repeat_flag->is_repeat = true;
 	attach_to_last(state, repeat_flag);
 
-	char *repeat_num_char = calloc(num_len + 1, sizeof(char));
+	char *repeat_num_char = safe_calloc(num_len + 1, sizeof(char));
 	sprintf(repeat_num_char, "%d", num);
 
 	for (int i = 0; i < num_len; i++) {
 		//   printf("%c\n", a[i]); // 打印每个字符
-		struct wsk_keypress *repeat_num = calloc(1, sizeof(struct wsk_keypress));
+		struct wsk_keypress *repeat_num = safe_calloc(1, sizeof(struct wsk_keypress));
 		change_numchar_to_special(repeat_num->name, repeat_num_char[i]);
 		repeat_num->is_repeat = true;
 		attach_to_last(state, repeat_num);
@@ -724,13 +787,13 @@ static void attach_repeat_flag(struct wsk_state *state, int num, int num_len) {
 
 /* Generate a synthetic repeat for a held key */
 static void generate_held_key_repeat(struct wsk_state *state) {
-	int del_charnum = caculat_del_charnum_of_int(state->combination_keye_repetition);
-	if (state->combination_keye_repetition > 2)
+	int del_charnum = calculate_del_charnum_of_int(state->combination_key_repetition);
+	if (state->combination_key_repetition > 2)
 		del_last_key(state, del_charnum);
-	state->combination_keye_repetition++;
-	if (state->combination_keye_repetition > 2) {
-		int add_charnum = caculat_add_charnum_of_int(state->combination_keye_repetition);
-		attach_repeat_flag(state, state->combination_keye_repetition, add_charnum);
+	state->combination_key_repetition++;
+	if (state->combination_key_repetition > 2) {
+		int add_charnum = calculate_add_charnum_of_int(state->combination_key_repetition);
+		attach_repeat_flag(state, state->combination_key_repetition, add_charnum);
 	}
 	set_dirty(state);
 }
@@ -812,61 +875,14 @@ static int append_key_with_modifiers(struct wsk_state *state, struct wsk_keypres
 		link = &(*link)->next;
 	int n = 0;
 
-	if (state->shift_l_hold) {
-		struct wsk_keypress *tk = calloc(1, sizeof(struct wsk_keypress));
-		strcpy(tk->name, "Shift_L");
-		*link = tk;
-		link = &(*link)->next;
-		n++;
-	}
-	if (state->shift_r_hold) {
-		struct wsk_keypress *tk = calloc(1, sizeof(struct wsk_keypress));
-		strcpy(tk->name, "Shift_R");
-		*link = tk;
-		link = &(*link)->next;
-		n++;
-	}
-	if (state->ctrl_l_hold) {
-		struct wsk_keypress *tk = calloc(1, sizeof(struct wsk_keypress));
-		strcpy(tk->name, "Control_L");
-		*link = tk;
-		link = &(*link)->next;
-		n++;
-	}
-	if (state->ctrl_r_hold) {
-		struct wsk_keypress *tk = calloc(1, sizeof(struct wsk_keypress));
-		strcpy(tk->name, "Control_R");
-		*link = tk;
-		link = &(*link)->next;
-		n++;
-	}
-	if (state->super_l_hold) {
-		struct wsk_keypress *tk = calloc(1, sizeof(struct wsk_keypress));
-		strcpy(tk->name, "Super_L");
-		*link = tk;
-		link = &(*link)->next;
-		n++;
-	}
-	if (state->supre_r_hold) {
-		struct wsk_keypress *tk = calloc(1, sizeof(struct wsk_keypress));
-		strcpy(tk->name, "Super_R");
-		*link = tk;
-		link = &(*link)->next;
-		n++;
-	}
-	if (state->alt_l_hold) {
-		struct wsk_keypress *tk = calloc(1, sizeof(struct wsk_keypress));
-		strcpy(tk->name, "Alt_L");
-		*link = tk;
-		link = &(*link)->next;
-		n++;
-	}
-	if (state->alt_r_hold) {
-		struct wsk_keypress *tk = calloc(1, sizeof(struct wsk_keypress));
-		strcpy(tk->name, "Alt_R");
-		*link = tk;
-		link = &(*link)->next;
-		n++;
+	for (int i = 0; i < 10; i++) {
+		if (*modifier_hold_ptr(state, i)) {
+			struct wsk_keypress *tk = safe_calloc(1, sizeof(struct wsk_keypress));
+			strcpy(tk->name, modifier_display_name(i));
+			*link = tk;
+			link = &(*link)->next;
+			n++;
+		}
 	}
 
 	*link = kp;
@@ -880,8 +896,8 @@ static void mask_flush(struct wsk_state *state, struct wsk_keypress *current_kp)
 		append_key_with_modifiers(state, state->mask.buffer[i]);
 	append_key_with_modifiers(state, current_kp);
 	// Reset repeat detection
-	memset(state->prev_combination_keye, 0, sizeof(state->prev_combination_keye));
-	state->combination_keye_repetition = 1;
+	memset(state->prev_combination_key, 0, sizeof(state->prev_combination_key));
+	state->combination_key_repetition = 1;
 	mask_reset(&state->mask);
 }
 
@@ -913,8 +929,7 @@ static void handle_libinput_event(struct wsk_state *state, struct libinput_event
 	xkb_keysym_t keysym = xkb_state_key_get_one_sym(state->xkb_state, keycode);
 
 	struct wsk_keypress *keypress;
-	keypress = calloc(1, sizeof(struct wsk_keypress));
-	assert(keypress);
+	keypress = safe_calloc(1, sizeof(struct wsk_keypress));
 	keypress->sym = keysym;
 	xkb_keysym_get_name(keypress->sym, keypress->name, sizeof(keypress->name));
 	if (xkb_state_key_get_utf8(state->xkb_state, keycode, keypress->utf8, sizeof(keypress->utf8)) <= 0 ||
@@ -924,31 +939,12 @@ static void handle_libinput_event(struct wsk_state *state, struct libinput_event
 
 	WSK_TRACE("key_event sym=%u name=%s state=%s", keysym, keypress->name, key_state == LIBINPUT_KEY_STATE_PRESSED ? "pressed" : "released");
 
+	int mod_idx = find_modifier(keypress->name);
 	switch (key_state) {
 		case LIBINPUT_KEY_STATE_RELEASED:
 			//if 'ctrl shift alt super' release, clear it's press state
-			if (strlen(keypress->name) > 2 &&
-			    strstr("Control_LControl_RAlt_LAlt_RSuper_LSuper_RShift_LShift_RMeta_LMeta_R",
-				   keypress->name)) {
-				if (strcmp(keypress->name, "Control_L") == 0) {
-					state->ctrl_l_hold = 0;
-				} else if (strcmp(keypress->name, "Control_R") == 0) {
-					state->ctrl_r_hold = 0;
-				} else if (strcmp(keypress->name, "Alt_L") == 0 ||
-					   strcmp(keypress->name, "Meta_L") == 0) {
-					state->alt_l_hold = 0;
-				} else if (strcmp(keypress->name, "Alt_R") == 0 ||
-					   strcmp(keypress->name, "Meta_R") == 0) {
-					state->alt_r_hold = 0;
-				} else if (strcmp(keypress->name, "Super_L") == 0) {
-					state->super_l_hold = 0;
-				} else if (strcmp(keypress->name, "Super_R") == 0) {
-					state->supre_r_hold = 0;
-				} else if (strcmp(keypress->name, "Shift_L") == 0) {
-					state->shift_l_hold = 0;
-				} else if (strcmp(keypress->name, "Shift_R") == 0) {
-					state->shift_r_hold = 0;
-				}
+			if (mod_idx >= 0) {
+				*modifier_hold_ptr(state, mod_idx) = 0;
 				free(keypress);
 				state->last_was_release = 1;
 				clock_gettime(CLOCK_MONOTONIC, &state->last_key);
@@ -957,28 +953,8 @@ static void handle_libinput_event(struct wsk_state *state, struct libinput_event
 			break;
 		case LIBINPUT_KEY_STATE_PRESSED:
 			//if 'ctrl shift alt super' press,mark it's press state
-			if (strlen(keypress->name) > 2 &&
-			    strstr("Control_LControl_RAlt_LAlt_RSuper_LSuper_RShift_LShift_RMeta_LMeta_R",
-				   keypress->name)) {
-				if (strcmp(keypress->name, "Control_L") == 0) {
-					state->ctrl_l_hold = 1;
-				} else if (strcmp(keypress->name, "Control_R") == 0) {
-					state->ctrl_r_hold = 1;
-				} else if (strcmp(keypress->name, "Alt_L") == 0 ||
-					   strcmp(keypress->name, "Meta_L") == 0) {
-					state->alt_l_hold = 1;
-				} else if (strcmp(keypress->name, "Alt_R") == 0 ||
-					   strcmp(keypress->name, "Meta_R") == 0) {
-					state->alt_r_hold = 1;
-				} else if (strcmp(keypress->name, "Super_L") == 0) {
-					state->super_l_hold = 1;
-				} else if (strcmp(keypress->name, "Super_R") == 0) {
-					state->supre_r_hold = 1;
-				} else if (strcmp(keypress->name, "Shift_L") == 0) {
-					state->shift_l_hold = 1;
-				} else if (strcmp(keypress->name, "Shift_R") == 0) {
-					state->shift_r_hold = 1;
-				}
+			if (mod_idx >= 0) {
+				*modifier_hold_ptr(state, mod_idx) = 1;
 				free(keypress);
 				state->last_was_release = 0;
 				clock_gettime(CLOCK_MONOTONIC, &state->last_key);
@@ -1007,7 +983,7 @@ static void handle_libinput_event(struct wsk_state *state, struct libinput_event
 				}
 
 				// Key repeat while pattern buffer active — flush/discard
-				if (state->combination_keye_repetition > 1 && state->mask.buffer_len > 0) {
+				if (state->combination_key_repetition > 1 && state->mask.buffer_len > 0) {
 					int max_m = 0;
 					for (int i = 0; i < state->mask.num_patterns; i++)
 						if (state->mask.matched[i] > max_m)
@@ -1054,110 +1030,57 @@ static void handle_libinput_event(struct wsk_state *state, struct libinput_event
 				int special_key_num = 0;
 				memset(state->current_combination_key, 0, sizeof(state->current_combination_key));
 
-				// Build combo string (just string, no nodes yet)
-				if (state->shift_l_hold)
-					strcat(state->current_combination_key, "Shift_L");
-				if (state->shift_r_hold)
-					strcat(state->current_combination_key, "Shift_R");
-				if (state->ctrl_l_hold)
-					strcat(state->current_combination_key, "Control_L");
-				if (state->ctrl_r_hold)
-					strcat(state->current_combination_key, "Control_R");
-				if (state->super_l_hold)
-					strcat(state->current_combination_key, "Super_L");
-				if (state->supre_r_hold)
-					strcat(state->current_combination_key, "Super_R");
-				if (state->alt_l_hold)
-					strcat(state->current_combination_key, "Alt_L");
-				if (state->alt_r_hold)
-					strcat(state->current_combination_key, "Alt_R");
-				strcat(state->current_combination_key, keypress->name);
+				char *combo = state->current_combination_key;
+				size_t combo_left = sizeof(state->current_combination_key);
+				int n;
+				for (int i = 0; i < 10; i++) {
+					if (*modifier_hold_ptr(state, i) && combo_left > 1) {
+						n = snprintf(combo, combo_left, "%s", modifier_display_name(i));
+						if (n >= (int)combo_left) n = (int)combo_left - 1;
+						combo += n; combo_left -= n;
+					}
+				}
+				if (combo_left > 1)
+					snprintf(combo, combo_left, "%s", keypress->name);
 
-				if (strcmp(state->prev_combination_keye, "") != 0 &&
-				    strcmp(state->prev_combination_keye, state->current_combination_key) == 0) {
+				if (strcmp(state->prev_combination_key, "") != 0 &&
+				    strcmp(state->prev_combination_key, state->current_combination_key) == 0) {
 					// === REPEAT PATH ===
-					if (state->combination_keye_repetition < 2) {
+					if (state->combination_key_repetition < 2) {
 						// 2nd press: add key node (no counter yet)
 						*link = keypress;
 					} else {
 						// 3rd+ press: counter shows, don't add key node
 						free(keypress);
-						if (state->combination_keye_repetition > 2)
+						if (state->combination_key_repetition > 2)
 							del_last_key(state,
-								caculat_del_charnum_of_int(state->combination_keye_repetition));
+								calculate_del_charnum_of_int(state->combination_key_repetition));
 					}
-					state->combination_keye_repetition++;
-					if (state->combination_keye_repetition > 2) {
+					state->combination_key_repetition++;
+					if (state->combination_key_repetition > 2) {
 						int add_charnum =
-							caculat_add_charnum_of_int(state->combination_keye_repetition);
-						attach_repeat_flag(state, state->combination_keye_repetition,
+							calculate_add_charnum_of_int(state->combination_key_repetition);
+						attach_repeat_flag(state, state->combination_key_repetition,
 								   add_charnum);
 					}
 				} else {
 					// === FIRST PRESS PATH: add modifier nodes + main key ===
-					if (state->shift_l_hold) {
-						struct wsk_keypress *temp_keypress = calloc(1, sizeof(struct wsk_keypress));
-						strcpy(temp_keypress->name, "Shift_L");
-						special_key_num++;
-						*link = temp_keypress;
-						link = &(*link)->next;
-					}
-					if (state->shift_r_hold) {
-						struct wsk_keypress *temp_keypress = calloc(1, sizeof(struct wsk_keypress));
-						strcpy(temp_keypress->name, "Shift_R");
-						special_key_num++;
-						*link = temp_keypress;
-						link = &(*link)->next;
-					}
-					if (state->ctrl_l_hold) {
-						struct wsk_keypress *temp_keypress = calloc(1, sizeof(struct wsk_keypress));
-						strcpy(temp_keypress->name, "Control_L");
-						special_key_num++;
-						*link = temp_keypress;
-						link = &(*link)->next;
-					}
-					if (state->ctrl_r_hold) {
-						struct wsk_keypress *temp_keypress = calloc(1, sizeof(struct wsk_keypress));
-						strcpy(temp_keypress->name, "Control_R");
-						special_key_num++;
-						*link = temp_keypress;
-						link = &(*link)->next;
-					}
-					if (state->super_l_hold) {
-						struct wsk_keypress *temp_keypress = calloc(1, sizeof(struct wsk_keypress));
-						strcpy(temp_keypress->name, "Super_L");
-						special_key_num++;
-						*link = temp_keypress;
-						link = &(*link)->next;
-					}
-					if (state->supre_r_hold) {
-						struct wsk_keypress *temp_keypress = calloc(1, sizeof(struct wsk_keypress));
-						strcpy(temp_keypress->name, "Super_R");
-						special_key_num++;
-						*link = temp_keypress;
-						link = &(*link)->next;
-					}
-					if (state->alt_l_hold) {
-						struct wsk_keypress *temp_keypress = calloc(1, sizeof(struct wsk_keypress));
-						strcpy(temp_keypress->name, "Alt_L");
-						special_key_num++;
-						*link = temp_keypress;
-						link = &(*link)->next;
-					}
-					if (state->alt_r_hold) {
-						struct wsk_keypress *temp_keypress = calloc(1, sizeof(struct wsk_keypress));
-						strcpy(temp_keypress->name, "Alt_R");
-						special_key_num++;
-						*link = temp_keypress;
-						link = &(*link)->next;
+					for (int i = 0; i < 10; i++) {
+						if (*modifier_hold_ptr(state, i)) {
+							struct wsk_keypress *temp_keypress = safe_calloc(1, sizeof(struct wsk_keypress));
+							strcpy(temp_keypress->name, modifier_display_name(i));
+							special_key_num++;
+							*link = temp_keypress;
+							link = &(*link)->next;
+						}
 					}
 
 					*link = keypress;
 					special_key_num++;
 
-					memset(state->prev_combination_keye, 0, sizeof(state->prev_combination_keye));
-					strcat(state->prev_combination_keye, state->current_combination_key);
-					state->combination_keye_repetition = 1;
+					memset(state->prev_combination_key, 0, sizeof(state->prev_combination_key));
+					strcat(state->prev_combination_key, state->current_combination_key);
+					state->combination_key_repetition = 1;
 				}
 			}
 			break;
@@ -1227,9 +1150,9 @@ void clear_full_keylink(struct wsk_keypress *key, struct wsk_state *state) {
 		free(key);
 		key = next;
 	}
-	state->combination_keye_repetition = 1;
+	state->combination_key_repetition = 1;
 	memset(state->current_combination_key, 0, sizeof(state->current_combination_key));
-	memset(state->prev_combination_keye, 0, sizeof(state->prev_combination_keye));
+	memset(state->prev_combination_key, 0, sizeof(state->prev_combination_key));
 	state->keys = NULL;
 	set_dirty(state);
 }
@@ -1271,10 +1194,10 @@ int main(int argc, char *argv[]) {
 	state.alt_l_hold = 0;
 	state.alt_r_hold = 0;
 	state.super_l_hold = 0;
-	state.supre_r_hold = 0;
+	state.super_r_hold = 0;
 	state.shift_l_hold = 0;
 	state.shift_r_hold = 0;
-	state.combination_keye_repetition = 1;
+	state.combination_key_repetition = 1;
 	state.key_held = false;
 	state.last_repeat_time.tv_sec = 0;
 	state.last_repeat_time.tv_nsec = 0;
@@ -1291,10 +1214,10 @@ int main(int argc, char *argv[]) {
 
 	int c;
 	opterr = 0;
-	while ((c = getopt(argc, argv, "hib:f:s:r:F:t:a:m:o:l:D:H:PRO:")) != -1) {
+	while ((c = getopt(argc, argv, "hib:f:s:r:F:t:a:m:o:l:D:H:PRO::")) != -1) {
 		switch (c) {
 			case 'l':
-				state.length_limit = atoi(optarg);
+				state.length_limit = (int)strtol(optarg, NULL, 10);
 				break;
 			case 'b':
 				state.background = parse_color(optarg);
@@ -1312,7 +1235,7 @@ int main(int argc, char *argv[]) {
 				state.font = optarg;
 				break;
 			case 't':
-				state.timeout = atoi(optarg);
+				state.timeout = (int)strtol(optarg, NULL, 10);
 				break;
 			case 'a':
 				if (strcmp(optarg, "top") == 0) {
@@ -1326,7 +1249,7 @@ int main(int argc, char *argv[]) {
 				}
 				break;
 			case 'm':
-				state.margin = atoi(optarg);
+				state.margin = (int)strtol(optarg, NULL, 10);
 				break;
 			case 'i':
 				state.inspect = true;
@@ -1346,7 +1269,7 @@ int main(int argc, char *argv[]) {
 				break;
 		#endif
 			case 'H':
-				state.min_height = (uint32_t)atoi(optarg);
+				state.min_height = (uint32_t)strtol(optarg, NULL, 10);
 				break;
 			case 'P':
 				state.paused = true;
@@ -1361,13 +1284,9 @@ int main(int argc, char *argv[]) {
 				opacity_arg = optarg;
 				break;
 			case '?':
-				if (optopt == 'O') {
-					want_opacity_query = true;
-					break;
-				}
 				fprintf(stderr, "usage: wshowkeys [-b|-f|-s|-r #RRGGBB[AA]] [-F font] "
 						"[-t timeout]\n\t[-a top|left|right|bottom] [-m margin] "
-						"[-o output] [-l numOfLengthLimit] [-H padding] [-i] [-P] [-R] [-O opacity]");
+						"[-o output] [-l numOfLengthLimit] [-H padding] [-i] [-P] [-R] [-O [opacity]]");
 				return 1;
 		}
 	}
@@ -1441,9 +1360,16 @@ int main(int argc, char *argv[]) {
 				char term = '\0';
 				write(conn_fd, &term, 1);
 				char buf[32] = {0};
-				ssize_t n = read(conn_fd, buf, sizeof(buf) - 1);
-				if (n > 0) {
-					buf[n] = '\0';
+				size_t pos = 0;
+				while (pos < sizeof(buf) - 1) {
+					ssize_t nr = read(conn_fd, &buf[pos], 1);
+					if (nr <= 0)
+						break;
+					if (buf[pos] == '\0')
+						break;
+					pos++;
+				}
+				if (pos > 0) {
 					printf("%s", buf);
 				}
 				close(conn_fd);
@@ -1683,9 +1609,10 @@ int main(int argc, char *argv[]) {
 							display = key->name;
 						}
 					}
-					const char *pad_before = (prev_display && prev_display[strlen(prev_display) - 1] == '+')
-									 ? ""
-									 : KEY_PAD_BEFORE;
+				size_t prev_len = prev_display ? strlen(prev_display) : 0;
+				const char *pad_before = (prev_len > 0 && prev_display[prev_len - 1] == '+')
+								 ? ""
+								 : KEY_PAD_BEFORE;
 					all_key_len += strlen(pad_before) + strlen(display) + strlen(KEY_PAD_AFTER);
 					prev_display = display;
 					struct wsk_keypress *next = key->next;
@@ -1718,7 +1645,7 @@ int main(int argc, char *argv[]) {
 
 		if (!state.paused) {
 			/* Synthetic repeat for held key (libinput drops kernel auto-repeat) */
-			if (state.key_held && state.prev_combination_keye[0] != '\0') {
+			if (state.key_held && state.prev_combination_key[0] != '\0') {
 				struct timespec now;
 				clock_gettime(CLOCK_MONOTONIC, &now);
 				long elapsed_ms = (now.tv_sec - state.last_key.tv_sec) * 1000L
@@ -1772,41 +1699,46 @@ int main(int argc, char *argv[]) {
 						state.paused = false;
 					} else if (cmd == 'O') {
 						char argbuf[16] = {0};
-						ssize_t nr = read(client_fd, argbuf, sizeof(argbuf) - 1);
-						if (nr > 0) {
-							argbuf[nr] = '\0';
-							if (argbuf[0] == '\0') {
-								char resp[32];
-								int len = snprintf(resp, sizeof(resp), "%g", state.opacity);
-								write(client_fd, resp, len);
-							} else if (argbuf[0] == '+') {
-								state.opacity += strtof(argbuf + 1, NULL);
-								if (state.opacity > 1.0f) state.opacity = 1.0f;
-								if (state.opacity < 0.0f) state.opacity = 0.0f;
-								char resp[32];
-								int len = snprintf(resp, sizeof(resp), "%g", state.opacity);
-								write(client_fd, resp, len);
-								if (surface_is_configured(&state) && state.surface)
-									render_frame(&state);
-							} else if (argbuf[0] == '-') {
-								state.opacity -= strtof(argbuf + 1, NULL);
-								if (state.opacity > 1.0f) state.opacity = 1.0f;
-								if (state.opacity < 0.0f) state.opacity = 0.0f;
-								char resp[32];
-								int len = snprintf(resp, sizeof(resp), "%g", state.opacity);
-								write(client_fd, resp, len);
-								if (surface_is_configured(&state) && state.surface)
-									render_frame(&state);
-							} else {
-								state.opacity = strtof(argbuf, NULL);
-								if (state.opacity > 1.0f) state.opacity = 1.0f;
-								if (state.opacity < 0.0f) state.opacity = 0.0f;
-								char resp[32];
-								int len = snprintf(resp, sizeof(resp), "%g", state.opacity);
-								write(client_fd, resp, len);
-								if (surface_is_configured(&state) && state.surface)
-									render_frame(&state);
-							}
+						size_t argpos = 0;
+						while (argpos < sizeof(argbuf) - 1) {
+							ssize_t nr = read(client_fd, &argbuf[argpos], 1);
+							if (nr <= 0)
+								break;
+							if (argbuf[argpos] == '\0')
+								break;
+							argpos++;
+						}
+						if (argbuf[0] == '\0') {
+							char resp[32];
+							int len = snprintf(resp, sizeof(resp), "%g", state.opacity);
+							write(client_fd, resp, len);
+						} else if (argbuf[0] == '+') {
+							state.opacity += strtof(argbuf + 1, NULL);
+							if (state.opacity > 1.0f) state.opacity = 1.0f;
+							if (state.opacity < 0.0f) state.opacity = 0.0f;
+							char resp[32];
+							int len = snprintf(resp, sizeof(resp), "%g", state.opacity);
+							write(client_fd, resp, len);
+							if (surface_is_configured(&state) && state.surface)
+								render_frame(&state);
+						} else if (argbuf[0] == '-') {
+							state.opacity -= strtof(argbuf + 1, NULL);
+							if (state.opacity > 1.0f) state.opacity = 1.0f;
+							if (state.opacity < 0.0f) state.opacity = 0.0f;
+							char resp[32];
+							int len = snprintf(resp, sizeof(resp), "%g", state.opacity);
+							write(client_fd, resp, len);
+							if (surface_is_configured(&state) && state.surface)
+								render_frame(&state);
+						} else {
+							state.opacity = strtof(argbuf, NULL);
+							if (state.opacity > 1.0f) state.opacity = 1.0f;
+							if (state.opacity < 0.0f) state.opacity = 0.0f;
+							char resp[32];
+							int len = snprintf(resp, sizeof(resp), "%g", state.opacity);
+							write(client_fd, resp, len);
+							if (surface_is_configured(&state) && state.surface)
+								render_frame(&state);
 						}
 					}
 				}
@@ -1844,6 +1776,31 @@ int main(int argc, char *argv[]) {
 	}
 #endif
 	free(state.repeat_font);
+
+	/* Wayland / XKB / linked-list cleanup */
+	struct wsk_output *wsk_out = state.outputs;
+	while (wsk_out) {
+		struct wsk_output *next = wsk_out->next;
+		if (wsk_out->xdg_output)
+			zxdg_output_v1_destroy(wsk_out->xdg_output);
+		wl_output_destroy(wsk_out->output);
+		free(wsk_out);
+		wsk_out = next;
+	}
+	zwlr_layer_surface_v1_destroy(state.layer_surface);
+	if (state.layer_shell)
+		wl_proxy_destroy((struct wl_proxy *)state.layer_shell);
+	wl_surface_destroy(state.surface);
+	if (state.keyboard)
+		wl_keyboard_destroy(state.keyboard);
+	wl_proxy_destroy((struct wl_proxy *)state.seat);
+	wl_compositor_destroy(state.compositor);
+	wl_shm_destroy(state.shm);
+	if (state.output_mgr)
+		wl_proxy_destroy((struct wl_proxy *)state.output_mgr);
+	xkb_state_unref(state.xkb_state);
+	xkb_keymap_unref(state.xkb_keymap);
+	xkb_context_unref(state.xkb_context);
 exit:
 	if (state.sock_fd >= 0) {
 		close(state.sock_fd);
