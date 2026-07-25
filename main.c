@@ -27,17 +27,19 @@
 
 #ifdef WSK_DEBUG
 static FILE *trace_file = NULL;
-#define WSK_TRACE(fmt, ...) do { \
-	if (trace_file) { \
-		struct timespec _ts; \
-		clock_gettime(CLOCK_MONOTONIC, &_ts); \
-		fprintf(trace_file, "[%ld.%06ld] " fmt "\n", \
-			_ts.tv_sec, _ts.tv_nsec / 1000, ##__VA_ARGS__); \
-		fflush(trace_file); \
-	} \
-} while(0)
+#define WSK_TRACE(fmt, ...)                                                                                            \
+	do {                                                                                                           \
+		if (trace_file) {                                                                                      \
+			struct timespec _ts;                                                                           \
+			clock_gettime(CLOCK_MONOTONIC, &_ts);                                                          \
+			fprintf(trace_file, "[%ld.%06ld] " fmt "\n", _ts.tv_sec, _ts.tv_nsec / 1000, ##__VA_ARGS__);   \
+			fflush(trace_file);                                                                            \
+		}                                                                                                      \
+	} while (0)
 #else
-#define WSK_TRACE(fmt, ...) do {} while(0)
+#define WSK_TRACE(fmt, ...)                                                                                            \
+	do {                                                                                                           \
+	} while (0)
 #endif
 
 #define MASK_PATTERNS_MAX 32
@@ -83,7 +85,7 @@ struct wsk_state {
 	char *repeat_font;
 	int timeout;
 	int length_limit;
-	int fixed_width;  /* 0=dynamic resize per keystroke, >0=fixed logical pixels */
+	int fixed_width; /* 0=dynamic resize per keystroke, >0=fixed logical pixels */
 	uint32_t min_height;
 
 	struct wl_display *display;
@@ -145,32 +147,10 @@ struct wsk_state {
 	float opacity;
 };
 
-/* void logtofile(const char *fmt, ...) { */
-/*   char buf[256]; */
-/*   char cmd[256]; */
-/*   va_list ap; */
-/*   va_start(ap, fmt); */
-/*   vsprintf((char *)buf, fmt, ap); */
-/*   va_end(ap); */
-/*   unsigned int i = strlen((const char *)buf); */
-/*  */
-/*   sprintf(cmd, "echo '%.*s' >> ~/log", i, buf); */
-/*   system(cmd); */
-/* } */
-/*  */
-/* void lognumtofile(unsigned int num) { */
-/*   char cmd[256]; */
-/*   sprintf(cmd, "echo '%x' >> ~/log", num); */
-/*   system(cmd); */
-/* } */
-
 static int find_modifier(const char *name) {
 	static const char *mod_names[] = {
-		"Control_L", "Control_R",
-		"Alt_L", "Meta_L",
-		"Alt_R", "Meta_R",
-		"Super_L", "Super_R",
-		"Shift_L", "Shift_R",
+		"Control_L", "Control_R", "Alt_L",   "Meta_L",	"Alt_R",
+		"Meta_R",    "Super_L",	  "Super_R", "Shift_L", "Shift_R",
 	};
 	for (int i = 0; i < 10; i++)
 		if (strcmp(name, mod_names[i]) == 0)
@@ -180,29 +160,32 @@ static int find_modifier(const char *name) {
 
 static int *modifier_hold_ptr(struct wsk_state *state, int idx) {
 	switch (idx) {
-		case 0: return &state->ctrl_l_hold;
-		case 1: return &state->ctrl_r_hold;
+		case 0:
+			return &state->ctrl_l_hold;
+		case 1:
+			return &state->ctrl_r_hold;
 		case 2: /* Alt_L */
 		case 3: /* Meta_L alias */
 			return &state->alt_l_hold;
 		case 4: /* Alt_R */
 		case 5: /* Meta_R alias */
 			return &state->alt_r_hold;
-		case 6: return &state->super_l_hold;
-		case 7: return &state->super_r_hold;
-		case 8: return &state->shift_l_hold;
-		case 9: return &state->shift_r_hold;
+		case 6:
+			return &state->super_l_hold;
+		case 7:
+			return &state->super_r_hold;
+		case 8:
+			return &state->shift_l_hold;
+		case 9:
+			return &state->shift_r_hold;
 	}
 	return NULL;
 }
 
 static const char *modifier_display_name(int idx) {
 	static const char *names[] = {
-		"Control_L", "Control_R",
-		"Alt_L", "Alt_L",
-		"Alt_R", "Alt_R",
-		"Super_L", "Super_R",
-		"Shift_L", "Shift_R",
+		"Control_L", "Control_R", "Alt_L",   "Alt_L",	"Alt_R",
+		"Alt_R",     "Super_L",	  "Super_R", "Shift_L", "Shift_R",
 	};
 	if (idx >= 0 && idx < 10)
 		return names[idx];
@@ -219,8 +202,7 @@ static void *safe_calloc(size_t nmemb, size_t size) {
 }
 
 static void cairo_set_source_u32(cairo_t *cairo, uint32_t color, float opacity) {
-	cairo_set_source_rgba(cairo, (color >> (3 * 8) & 0xFF) / 255.0,
-			      (color >> (2 * 8) & 0xFF) / 255.0,
+	cairo_set_source_rgba(cairo, (color >> (3 * 8) & 0xFF) / 255.0, (color >> (2 * 8) & 0xFF) / 255.0,
 			      (color >> (1 * 8) & 0xFF) / 255.0, (color >> (0 * 8) & 0xFF) / 255.0 * opacity);
 }
 
@@ -304,14 +286,13 @@ static void render_to_cairo(cairo_t *cairo, struct wsk_state *state, int scale, 
 		}
 
 		size_t prev_len = prev_display ? strlen(prev_display) : 0;
-		const char *pad_before =
-			(prev_len > 0 && prev_display[prev_len - 1] == '+') ? "" : KEY_PAD_BEFORE;
+		const char *pad_before = (prev_len > 0 && prev_display[prev_len - 1] == '+') ? "" : KEY_PAD_BEFORE;
 
 		const char *use_font = key->is_repeat ? state->repeat_font : state->font;
 		int w, h;
 		get_text_size(cairo, use_font, &w, &h, NULL, scale, "%s%s%s", pad_before, display, KEY_PAD_AFTER);
 
-		int target_h = max_h + (int)state->min_height;
+		int target_h = max_h + (int) state->min_height;
 
 		int y_offset = 0;
 #if defined(TEXT_ALIGN_CENTER)
@@ -352,10 +333,9 @@ static int compute_fixed_width(struct wsk_state *state) {
 	return fixed;
 }
 
-static void commit_buffer(struct wsk_state *state, int scale,
-		uint32_t buf_w, uint32_t buf_h, bool paint_content, int x_offset) {
-	struct pool_buffer *buf = get_next_buffer(state->shm,
-		state->buffer_pool, buf_w * scale, buf_h * scale);
+static void commit_buffer(struct wsk_state *state, int scale, uint32_t buf_w, uint32_t buf_h, bool paint_content,
+			  int x_offset) {
+	struct pool_buffer *buf = get_next_buffer(state->shm, state->buffer_pool, buf_w * scale, buf_h * scale);
 	if (!buf)
 		return;
 	cairo_t *shm = buf->cairo;
@@ -364,20 +344,17 @@ static void commit_buffer(struct wsk_state *state, int scale,
 	cairo_paint(shm);
 	cairo_restore(shm);
 	if (paint_content) {
-		cairo_set_source_surface(shm, state->recording, (double)x_offset, 0.0);
+		cairo_set_source_surface(shm, state->recording, (double) x_offset, 0.0);
 		cairo_paint(shm);
 	}
 	wl_surface_set_buffer_scale(state->surface, scale);
 	wl_surface_attach(state->surface, buf->buffer, 0, 0);
-	wl_surface_damage_buffer(state->surface, 0, 0,
-		buf_w * scale, buf_h * scale);
+	wl_surface_damage_buffer(state->surface, 0, 0, buf_w * scale, buf_h * scale);
 	wl_surface_commit(state->surface);
 }
 
-static void render_frame_dynamic(struct wsk_state *state, int scale,
-		uint32_t width, uint32_t height);
-static void render_frame_fixed(struct wsk_state *state, int scale,
-		uint32_t width, uint32_t height);
+static void render_frame_dynamic(struct wsk_state *state, int scale, uint32_t width, uint32_t height);
+static void render_frame_fixed(struct wsk_state *state, int scale, uint32_t width, uint32_t height);
 
 static void render_frame(struct wsk_state *state) {
 	WSK_TRACE("render_frame entry");
@@ -392,7 +369,7 @@ static void render_frame(struct wsk_state *state) {
 		cairo_font_options_set_antialias(state->font_options, CAIRO_ANTIALIAS_SUBPIXEL);
 		if (state->output) {
 			cairo_font_options_set_subpixel_order(state->font_options,
-				to_cairo_subpixel_order(state->output->subpixel));
+							      to_cairo_subpixel_order(state->output->subpixel));
 		}
 	}
 
@@ -414,8 +391,7 @@ static void render_frame(struct wsk_state *state) {
 		render_frame_dynamic(state, scale, width, height);
 }
 
-static void render_frame_dynamic(struct wsk_state *state, int scale,
-		uint32_t width, uint32_t height) {
+static void render_frame_dynamic(struct wsk_state *state, int scale, uint32_t width, uint32_t height) {
 	if (height / scale != state->height || width / scale != state->width || state->width == 0) {
 		if (width == 0 || height == 0) {
 			if (state->width && state->height)
@@ -434,8 +410,7 @@ static void render_frame_dynamic(struct wsk_state *state, int scale,
 	}
 }
 
-static void render_frame_fixed(struct wsk_state *state, int scale,
-		uint32_t width, uint32_t height) {
+static void render_frame_fixed(struct wsk_state *state, int scale, uint32_t width, uint32_t height) {
 	if (height == 0) {
 		if (state->width && state->height)
 			commit_buffer(state, scale, state->width, state->height, false, 0);
@@ -443,16 +418,15 @@ static void render_frame_fixed(struct wsk_state *state, int scale,
 		return;
 	}
 	uint32_t target_h = height / scale;
-	if (state->height != target_h || state->width != (uint32_t)state->fixed_width) {
+	if (state->height != target_h || state->width != (uint32_t) state->fixed_width) {
 		if (!state->resize_pending) {
 			state->resize_pending = true;
-			zwlr_layer_surface_v1_set_size(state->layer_surface,
-				state->fixed_width, target_h);
+			zwlr_layer_surface_v1_set_size(state->layer_surface, state->fixed_width, target_h);
 		}
 		if (state->width && state->height)
 			commit_buffer(state, scale, state->width, state->height, true, 0);
 	} else {
-		int x_off = state->fixed_width * scale - (int)width;
+		int x_off = state->fixed_width * scale - (int) width;
 		commit_buffer(state, scale, state->fixed_width, state->height, true, x_off);
 	}
 }
@@ -504,8 +478,8 @@ static void debug_print_display(struct wsk_state *state) {
 static void layer_surface_configure(void *data, struct zwlr_layer_surface_v1 *zwlr_layer_surface_v1, uint32_t serial,
 				    uint32_t width, uint32_t height) {
 	struct wsk_state *state = data;
-	WSK_TRACE("configure serial=%u w=%u h=%u (current w=%u h=%u resize_pending=%d)",
-		serial, width, height, state->width, state->height, state->resize_pending);
+	WSK_TRACE("configure serial=%u w=%u h=%u (current w=%u h=%u resize_pending=%d)", serial, width, height,
+		  state->width, state->height, state->resize_pending);
 	state->width = width;
 	state->height = height;
 	state->resize_pending = false;
@@ -680,9 +654,7 @@ static void xdg_output_handle_logical_size(void *data, struct zxdg_output_v1 *xd
 
 static void xdg_output_handle_done(void *data, struct zxdg_output_v1 *xdg_output) {}
 
-static void xdg_output_handle_description(void *data, struct zxdg_output_v1 *xdg_output, const char *description) {
-	// Not needed
-}
+static void xdg_output_handle_description(void *data, struct zxdg_output_v1 *xdg_output, const char *description) {}
 
 static const struct zxdg_output_v1_listener xdg_output_listener = {
 	.logical_position = xdg_output_handle_logical_position,
@@ -726,9 +698,7 @@ static void registry_global(void *data, struct wl_registry *wl_registry, uint32_
 	}
 }
 
-static void registry_global_remove(void *data, struct wl_registry *wl_registry, uint32_t name) {
-	/* This space deliberately left blank */
-}
+static void registry_global_remove(void *data, struct wl_registry *wl_registry, uint32_t name) {}
 
 static const struct wl_registry_listener registry_listener = {
 	.global = registry_global,
@@ -786,10 +756,8 @@ static void attach_to_last(struct wsk_state *state, struct wsk_keypress *key) {
 	*attach = key;
 }
 
-static const char *numchar_map[] = {
-	REPEAT_0, REPEAT_1, REPEAT_2, REPEAT_3, REPEAT_4,
-	REPEAT_5, REPEAT_6, REPEAT_7, REPEAT_8, REPEAT_9
-};
+static const char *numchar_map[] = {REPEAT_0, REPEAT_1, REPEAT_2, REPEAT_3, REPEAT_4,
+				    REPEAT_5, REPEAT_6, REPEAT_7, REPEAT_8, REPEAT_9};
 
 static void change_numchar_to_special(char *target, char numchar) {
 	if (numchar >= '0' && numchar <= '9') {
@@ -807,7 +775,6 @@ static void attach_repeat_flag(struct wsk_state *state, int num, int num_len) {
 	sprintf(repeat_num_char, "%d", num);
 
 	for (int i = 0; i < num_len; i++) {
-		//   printf("%c\n", a[i]); // 打印每个字符
 		struct wsk_keypress *repeat_num = safe_calloc(1, sizeof(struct wsk_keypress));
 		change_numchar_to_special(repeat_num->name, repeat_num_char[i]);
 		repeat_num->is_repeat = true;
@@ -969,7 +936,8 @@ static void handle_libinput_event(struct wsk_state *state, struct libinput_event
 		keypress->utf8[0] = '\0';
 	}
 
-	WSK_TRACE("key_event sym=%u name=%s state=%s", keysym, keypress->name, key_state == LIBINPUT_KEY_STATE_PRESSED ? "pressed" : "released");
+	WSK_TRACE("key_event sym=%u name=%s state=%s", keysym, keypress->name,
+		  key_state == LIBINPUT_KEY_STATE_PRESSED ? "pressed" : "released");
 
 	int mod_idx = find_modifier(keypress->name);
 	switch (key_state) {
@@ -1069,8 +1037,10 @@ static void handle_libinput_event(struct wsk_state *state, struct libinput_event
 				for (int i = 0; i < 10; i++) {
 					if (*modifier_hold_ptr(state, i) && combo_left > 1) {
 						n = snprintf(combo, combo_left, "%s", modifier_display_name(i));
-						if (n >= (int)combo_left) n = (int)combo_left - 1;
-						combo += n; combo_left -= n;
+						if (n >= (int) combo_left)
+							n = (int) combo_left - 1;
+						combo += n;
+						combo_left -= n;
 					}
 				}
 				if (combo_left > 1)
@@ -1086,8 +1056,8 @@ static void handle_libinput_event(struct wsk_state *state, struct libinput_event
 						// 3rd+ press: counter shows, don't add key node
 						free(keypress);
 						if (state->combination_key_repetition > 2)
-							del_last_key(state,
-								calculate_del_charnum_of_int(state->combination_key_repetition));
+							del_last_key(state, calculate_del_charnum_of_int(
+										    state->combination_key_repetition));
 					}
 					state->combination_key_repetition++;
 					if (state->combination_key_repetition > 2) {
@@ -1100,7 +1070,8 @@ static void handle_libinput_event(struct wsk_state *state, struct libinput_event
 					// === FIRST PRESS PATH: add modifier nodes + main key ===
 					for (int i = 0; i < 10; i++) {
 						if (*modifier_hold_ptr(state, i)) {
-							struct wsk_keypress *temp_keypress = safe_calloc(1, sizeof(struct wsk_keypress));
+							struct wsk_keypress *temp_keypress =
+								safe_calloc(1, sizeof(struct wsk_keypress));
 							strcpy(temp_keypress->name, modifier_display_name(i));
 							special_key_num++;
 							*link = temp_keypress;
@@ -1251,10 +1222,10 @@ int main(int argc, char *argv[]) {
 	while ((c = getopt(argc, argv, "hib:f:s:r:F:t:a:m:o:l:w::D:H:PRO::")) != -1) {
 		switch (c) {
 			case 'l':
-				state.length_limit = (int)strtol(optarg, NULL, 10);
+				state.length_limit = (int) strtol(optarg, NULL, 10);
 				break;
 			case 'w':
-				state.fixed_width = optarg ? (int)strtol(optarg, NULL, 10) : -1;
+				state.fixed_width = optarg ? (int) strtol(optarg, NULL, 10) : -1;
 				break;
 			case 'b':
 				state.background = parse_color(optarg);
@@ -1272,7 +1243,7 @@ int main(int argc, char *argv[]) {
 				state.font = optarg;
 				break;
 			case 't':
-				state.timeout = (int)strtol(optarg, NULL, 10);
+				state.timeout = (int) strtol(optarg, NULL, 10);
 				break;
 			case 'a':
 				if (strcmp(optarg, "top") == 0) {
@@ -1286,7 +1257,7 @@ int main(int argc, char *argv[]) {
 				}
 				break;
 			case 'm':
-				state.margin = (int)strtol(optarg, NULL, 10);
+				state.margin = (int) strtol(optarg, NULL, 10);
 				break;
 			case 'i':
 				state.inspect = true;
@@ -1302,11 +1273,11 @@ int main(int argc, char *argv[]) {
 					fprintf(stderr, "Failed to open trace file: %s\n", optarg);
 					return 1;
 				}
-			WSK_TRACE("trace started pid=%d", getpid());
+				WSK_TRACE("trace started pid=%d", getpid());
 				break;
-		#endif
+#endif
 			case 'H':
-				state.min_height = (uint32_t)strtol(optarg, NULL, 10);
+				state.min_height = (uint32_t) strtol(optarg, NULL, 10);
 				break;
 			case 'P':
 				state.paused = true;
@@ -1323,7 +1294,8 @@ int main(int argc, char *argv[]) {
 			case '?':
 				fprintf(stderr, "usage: wshowkeys [-b|-f|-s|-r #RRGGBB[AA]] [-F font] "
 						"[-t timeout]\n\t[-a top|left|right|bottom] [-m margin] "
-						"[-o output] [-l numOfLengthLimit] [-w pixels] [-H padding] [-i] [-P] [-R] [-O [opacity]]");
+						"[-o output] [-l numOfLengthLimit] [-w pixels] [-H padding] [-i] [-P] "
+						"[-R] [-O [opacity]]");
 				return 1;
 		}
 	}
@@ -1333,8 +1305,10 @@ int main(int argc, char *argv[]) {
 
 	if (opacity_arg) {
 		float val = strtof(opacity_arg, NULL);
-		if (val < 0.01f) val = 0.01f;
-		if (val > 1.0f) val = 1.0f;
+		if (val < 0.01f)
+			val = 0.01f;
+		if (val > 1.0f)
+			val = 1.0f;
 		state.opacity = val;
 	}
 
@@ -1358,7 +1332,7 @@ int main(int argc, char *argv[]) {
 		snprintf(buf, sizeof(buf), "%s", path);
 		memcpy(addr.sun_path, buf, strlen(buf) + 1);
 
-		if (bind(state.sock_fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
+		if (bind(state.sock_fd, (struct sockaddr *) &addr, sizeof(addr)) == 0) {
 			if (listen(state.sock_fd, 5) < 0) {
 				fprintf(stderr, "listen: %s\n", strerror(errno));
 				close(state.sock_fd);
@@ -1376,7 +1350,7 @@ int main(int argc, char *argv[]) {
 				ret = 1;
 				goto exit;
 			}
-			if (connect(conn_fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
+			if (connect(conn_fd, (struct sockaddr *) &addr, sizeof(addr)) == 0) {
 				if (want_pause) {
 					char cmd = 'P';
 					write(conn_fd, &cmd, 1);
@@ -1391,32 +1365,32 @@ int main(int argc, char *argv[]) {
 					close(state.sock_fd);
 					return 0;
 				}
-			if (opacity_arg || want_opacity_query) {
-				char cmd = 'O';
-				write(conn_fd, &cmd, 1);
-				if (opacity_arg) {
-					write(conn_fd, opacity_arg, strlen(opacity_arg));
+				if (opacity_arg || want_opacity_query) {
+					char cmd = 'O';
+					write(conn_fd, &cmd, 1);
+					if (opacity_arg) {
+						write(conn_fd, opacity_arg, strlen(opacity_arg));
+					}
+					char term = '\0';
+					write(conn_fd, &term, 1);
+					char buf[32] = {0};
+					size_t pos = 0;
+					while (pos < sizeof(buf) - 1) {
+						ssize_t nr = read(conn_fd, &buf[pos], 1);
+						if (nr <= 0)
+							break;
+						if (buf[pos] == '\0')
+							break;
+						pos++;
+					}
+					if (pos > 0) {
+						printf("%s\n", buf);
+					}
+					close(conn_fd);
+					close(state.sock_fd);
+					return 0;
 				}
-				char term = '\0';
-				write(conn_fd, &term, 1);
-				char buf[32] = {0};
-				size_t pos = 0;
-				while (pos < sizeof(buf) - 1) {
-					ssize_t nr = read(conn_fd, &buf[pos], 1);
-					if (nr <= 0)
-						break;
-					if (buf[pos] == '\0')
-						break;
-					pos++;
-				}
-				if (pos > 0) {
-					printf("%s\n", buf);
-				}
-				close(conn_fd);
-				close(state.sock_fd);
-				return 0;
-			}
-				fprintf(stderr, "wiv: already running, use wiv -P to pause or wiv -R to resume\n");
+				fprintf(stderr, "wiv: already running, use one of flags -P -R -O, -h for help\n");
 				close(conn_fd);
 				close(state.sock_fd);
 				state.sock_fd = -1;
@@ -1426,7 +1400,7 @@ int main(int argc, char *argv[]) {
 			close(conn_fd);
 			/* No other instance — stale socket, unlink and retry */
 			unlink(path);
-			if (bind(state.sock_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+			if (bind(state.sock_fd, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
 				fprintf(stderr, "bind: %s\n", strerror(errno));
 				close(state.sock_fd);
 				state.sock_fd = -1;
@@ -1558,16 +1532,16 @@ int main(int argc, char *argv[]) {
 
 	struct pollfd pollfds[3];
 	int npollfds = 2;
-	pollfds[0] = (struct pollfd){
+	pollfds[0] = (struct pollfd) {
 		.fd = libinput_get_fd(state.libinput),
 		.events = POLLIN,
 	};
-	pollfds[1] = (struct pollfd){
+	pollfds[1] = (struct pollfd) {
 		.fd = wl_display_get_fd(state.display),
 		.events = POLLIN,
 	};
 	if (state.sock_fd >= 0) {
-		pollfds[2] = (struct pollfd){
+		pollfds[2] = (struct pollfd) {
 			.fd = state.sock_fd,
 			.events = POLLIN,
 		};
@@ -1590,15 +1564,15 @@ int main(int argc, char *argv[]) {
 				timeout = 200;
 			}
 			if (state.key_held && (timeout == -1 || REPEAT_RATE < timeout))
-				timeout = REPEAT_RATE;  /* Wake up often during key hold */
+				timeout = REPEAT_RATE; /* Wake up often during key hold */
 		}
 
 		if (poll(pollfds, npollfds, timeout) < 0) {
 			fprintf(stderr, "poll: %s\n", strerror(errno));
 			break;
 		}
-		WSK_TRACE("poll returned revents: libinput=0x%x wayland=0x%x timeout=%d",
-			pollfds[0].revents, pollfds[1].revents, timeout);
+		WSK_TRACE("poll returned revents: libinput=0x%x wayland=0x%x timeout=%d", pollfds[0].revents,
+			  pollfds[1].revents, timeout);
 
 		/* Check for fd errors */
 		if (pollfds[0].revents & (POLLHUP | POLLERR | POLLNVAL)) {
@@ -1620,10 +1594,10 @@ int main(int argc, char *argv[]) {
 			struct wsk_keypress *key = state.keys;
 
 			clock_gettime(CLOCK_MONOTONIC, &now);
-			long elapsed_ns =
-				(now.tv_sec - state.last_key.tv_sec) * 1000000000L + (now.tv_nsec - state.last_key.tv_nsec);
+			long elapsed_ns = (now.tv_sec - state.last_key.tv_sec) * 1000000000L +
+					  (now.tv_nsec - state.last_key.tv_nsec);
 			WSK_TRACE("timeout check: last_was_release=%d elapsed_ms=%ld timeout=%d keys=%p",
-				state.last_was_release, elapsed_ns / 1000000, state.timeout, (void*)key);
+				  state.last_was_release, elapsed_ns / 1000000, state.timeout, (void *) key);
 			if (state.last_was_release && elapsed_ns > (long) state.timeout * 1000000L) {
 				if (state.keys) {
 					clear_full_keylink(key, &state);
@@ -1641,8 +1615,9 @@ int main(int argc, char *argv[]) {
 					} else {
 						const KeymapEntry *entry = keymap_entry(key->name);
 						if (entry) {
-							display = entry->display ? entry->display
-								 : (key->utf8[0] ? key->utf8 : key->name);
+							display = entry->display
+									  ? entry->display
+									  : (key->utf8[0] ? key->utf8 : key->name);
 						} else if (key->utf8[0]) {
 							display = key->utf8;
 						} else {
@@ -1651,28 +1626,30 @@ int main(int argc, char *argv[]) {
 					}
 					if (state.fixed_width && state.recording_cairo) {
 						size_t prev_len = prev_display ? strlen(prev_display) : 0;
-						const char *pad_before = (prev_len > 0 && prev_display[prev_len - 1] == '+')
-										 ? ""
-										 : KEY_PAD_BEFORE;
+						const char *pad_before =
+							(prev_len > 0 && prev_display[prev_len - 1] == '+')
+								? ""
+								: KEY_PAD_BEFORE;
 						int kw = 0, kh = 0;
 						int cur_scale = state.output ? state.output->scale : 1;
-						get_text_size(state.recording_cairo, state.font,
-							&kw, &kh, NULL, cur_scale,
-							"%s%s%s", pad_before, display, KEY_PAD_AFTER);
+						get_text_size(state.recording_cairo, state.font, &kw, &kh, NULL,
+							      cur_scale, "%s%s%s", pad_before, display, KEY_PAD_AFTER);
 						all_key_len += kw;
 					} else {
 						size_t prev_len = prev_display ? strlen(prev_display) : 0;
-						const char *pad_before = (prev_len > 0 && prev_display[prev_len - 1] == '+')
-										 ? ""
-										 : KEY_PAD_BEFORE;
-						all_key_len += strlen(pad_before) + strlen(display) + strlen(KEY_PAD_AFTER);
+						const char *pad_before =
+							(prev_len > 0 && prev_display[prev_len - 1] == '+')
+								? ""
+								: KEY_PAD_BEFORE;
+						all_key_len +=
+							strlen(pad_before) + strlen(display) + strlen(KEY_PAD_AFTER);
 					}
 					prev_display = display;
 					key = key->next;
 				}
 				int limit = state.fixed_width
-					? state.fixed_width * (state.output ? state.output->scale : 1)
-					: state.length_limit;
+						    ? state.fixed_width * (state.output ? state.output->scale : 1)
+						    : state.length_limit;
 				if (all_key_len > limit) {
 					key = state.keys;
 					struct wsk_keypress *next = key->next;
@@ -1703,8 +1680,8 @@ int main(int argc, char *argv[]) {
 			if (state.key_held && state.prev_combination_key[0] != '\0') {
 				struct timespec now;
 				clock_gettime(CLOCK_MONOTONIC, &now);
-				long elapsed_ms = (now.tv_sec - state.last_key.tv_sec) * 1000L
-						+ (now.tv_nsec - state.last_key.tv_nsec) / 1000000L;
+				long elapsed_ms = (now.tv_sec - state.last_key.tv_sec) * 1000L +
+						  (now.tv_nsec - state.last_key.tv_nsec) / 1000000L;
 
 				if (elapsed_ms >= REPEAT_DELAY) {
 					if (state.repeat_state == 0) {
@@ -1717,8 +1694,9 @@ int main(int argc, char *argv[]) {
 						state.last_repeat_time = now;
 						generate_held_key_repeat(&state);
 					} else if (state.repeat_state == 2) {
-						long repeat_elapsed = (now.tv_sec - state.last_repeat_time.tv_sec) * 1000L
-									+ (now.tv_nsec - state.last_repeat_time.tv_nsec) / 1000000L;
+						long repeat_elapsed =
+							(now.tv_sec - state.last_repeat_time.tv_sec) * 1000L +
+							(now.tv_nsec - state.last_repeat_time.tv_nsec) / 1000000L;
 						if (repeat_elapsed >= REPEAT_RATE) {
 							state.last_repeat_time = now;
 							generate_held_key_repeat(&state);
@@ -1769,8 +1747,10 @@ int main(int argc, char *argv[]) {
 							write(client_fd, resp, len);
 						} else if (argbuf[0] == '+') {
 							state.opacity += strtof(argbuf + 1, NULL);
-							if (state.opacity > 1.0f) state.opacity = 1.0f;
-							if (state.opacity < 0.01f) state.opacity = 0.01f;
+							if (state.opacity > 1.0f)
+								state.opacity = 1.0f;
+							if (state.opacity < 0.01f)
+								state.opacity = 0.01f;
 							char resp[32];
 							int len = snprintf(resp, sizeof(resp), "%g", state.opacity);
 							write(client_fd, resp, len);
@@ -1778,8 +1758,10 @@ int main(int argc, char *argv[]) {
 								render_frame(&state);
 						} else if (argbuf[0] == '-') {
 							state.opacity -= strtof(argbuf + 1, NULL);
-							if (state.opacity > 1.0f) state.opacity = 1.0f;
-							if (state.opacity < 0.01f) state.opacity = 0.01f;
+							if (state.opacity > 1.0f)
+								state.opacity = 1.0f;
+							if (state.opacity < 0.01f)
+								state.opacity = 0.01f;
 							char resp[32];
 							int len = snprintf(resp, sizeof(resp), "%g", state.opacity);
 							write(client_fd, resp, len);
@@ -1787,8 +1769,10 @@ int main(int argc, char *argv[]) {
 								render_frame(&state);
 						} else {
 							state.opacity = strtof(argbuf, NULL);
-							if (state.opacity > 1.0f) state.opacity = 1.0f;
-							if (state.opacity < 0.01f) state.opacity = 0.01f;
+							if (state.opacity > 1.0f)
+								state.opacity = 1.0f;
+							if (state.opacity < 0.01f)
+								state.opacity = 0.01f;
 							char resp[32];
 							int len = snprintf(resp, sizeof(resp), "%g", state.opacity);
 							write(client_fd, resp, len);
@@ -1802,8 +1786,8 @@ int main(int argc, char *argv[]) {
 		}
 
 		if (!state.paused) {
-			WSK_TRACE("pre-render dirty=%d configured=%d keys=%p",
-				state.dirty, surface_is_configured(&state), (void*)state.keys);
+			WSK_TRACE("pre-render dirty=%d configured=%d keys=%p", state.dirty,
+				  surface_is_configured(&state), (void *) state.keys);
 			if (state.dirty) {
 				state.dirty = false;
 				if (surface_is_configured(&state) && state.surface) {
@@ -1844,15 +1828,15 @@ int main(int argc, char *argv[]) {
 	}
 	zwlr_layer_surface_v1_destroy(state.layer_surface);
 	if (state.layer_shell)
-		wl_proxy_destroy((struct wl_proxy *)state.layer_shell);
+		wl_proxy_destroy((struct wl_proxy *) state.layer_shell);
 	wl_surface_destroy(state.surface);
 	if (state.keyboard)
 		wl_keyboard_destroy(state.keyboard);
-	wl_proxy_destroy((struct wl_proxy *)state.seat);
+	wl_proxy_destroy((struct wl_proxy *) state.seat);
 	wl_compositor_destroy(state.compositor);
 	wl_shm_destroy(state.shm);
 	if (state.output_mgr)
-		wl_proxy_destroy((struct wl_proxy *)state.output_mgr);
+		wl_proxy_destroy((struct wl_proxy *) state.output_mgr);
 	xkb_state_unref(state.xkb_state);
 	xkb_keymap_unref(state.xkb_keymap);
 	xkb_context_unref(state.xkb_context);
