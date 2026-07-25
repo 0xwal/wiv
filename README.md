@@ -84,6 +84,7 @@ wiv [-b|-f|-s #RRGGBB[AA]] [-F font] [-t timeout]
   - `wiv -O"+.1"` — increment opacity by 10%
   - `wiv -O"-.1"` — decrement opacity by 10%
 - *-c*: validate keymap config file and exit (prints `OK` or error with line number)
+- *-K*: reload keymap config from file (sends reload signal to running instance)
 
 **Environment:**
 - *WIV_MASK*: comma-separated key sequence patterns to suppress/sensitive

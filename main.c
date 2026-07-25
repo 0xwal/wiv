@@ -1199,6 +1199,7 @@ int main(int argc, char *argv[]) {
 
 	bool want_pause = false;
 	bool want_resume = false;
+	bool want_reload = false;
 	bool want_opacity_query = false;
 	bool validate_config = false;
 	const char *opacity_arg = NULL;
@@ -1238,7 +1239,7 @@ int main(int argc, char *argv[]) {
 
 	int c;
 	opterr = 0;
-	while ((c = getopt(argc, argv, "hibcf:s:r:F:t:a:m:o:l:w::D:H:PRO::")) != -1) {
+	while ((c = getopt(argc, argv, "hibcf:s:r:F:t:a:m:o:l:w::D:H:PRKO::")) != -1) {
 		switch (c) {
 			case 'l':
 				state.length_limit = (int) strtol(optarg, NULL, 10);
@@ -1313,12 +1314,16 @@ int main(int argc, char *argv[]) {
 			case 'c':
 				validate_config = true;
 				break;
+			case 'K':
+				want_reload = true;
+				break;
 			case '?':
 				fprintf(stderr, "usage: wshowkeys [-b|-f|-s|-r #RRGGBB[AA]] [-F font] "
 						"[-t timeout]\n\t[-a top|left|right|bottom] [-m margin] "
 						"[-o output] [-l numOfLengthLimit] [-w pixels] [-H padding] [-i] [-P] "
-						"[-c] [-R] [-O [opacity]]");
+						"[-c] [-R] [-O [opacity]] [-K]");
 				fprintf(stderr, "\n-c          validate keymap config and exit\n");
+				fprintf(stderr, "-K          reload keymap config\n");
 				return 1;
 		}
 	}
@@ -1417,7 +1422,14 @@ int main(int argc, char *argv[]) {
 					close(state.sock_fd);
 					return 0;
 				}
-				fprintf(stderr, "wiv: already running, use one of flags -P -R -O, -h for help\n");
+				if (want_reload) {
+					char cmd = 'K';
+					write(conn_fd, &cmd, 1);
+					close(conn_fd);
+					close(state.sock_fd);
+					return 0;
+				}
+				fprintf(stderr, "wiv: already running, use one of flags -P -R -O -K, -h for help\n");
 				close(conn_fd);
 				close(state.sock_fd);
 				state.sock_fd = -1;
@@ -1808,6 +1820,9 @@ int main(int argc, char *argv[]) {
 							if (surface_is_configured(&state) && state.surface)
 								render_frame(&state);
 						}
+					} else if (cmd == 'K') {
+						config_free();
+						config_load();
 					}
 				}
 				close(client_fd);
