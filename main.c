@@ -83,6 +83,7 @@ struct wsk_state {
 	char *repeat_font;
 	int timeout;
 	int length_limit;
+	int fixed_width;  /* 0=dynamic resize per keystroke, >0=fixed logical pixels */
 	uint32_t min_height;
 
 	struct wl_display *display;
@@ -331,6 +332,53 @@ static void render_to_cairo(cairo_t *cairo, struct wsk_state *state, int scale, 
 	}
 }
 
+static int compute_fixed_width(struct wsk_state *state) {
+	cairo_surface_t *tmp = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
+	cairo_t *cr = cairo_create(tmp);
+	int n = state->length_limit;
+	char *buf = malloc(n + 1);
+	memset(buf, 'W', n);
+	buf[n] = '\0';
+	int w = 0, h = 0;
+	get_text_size(cr, state->font, &w, &h, NULL, 1.0, "%s", buf);
+	free(buf);
+	cairo_destroy(cr);
+	cairo_surface_destroy(tmp);
+	if (state->fixed_width < 0)
+		return w;
+	int fixed = state->fixed_width;
+	if (w > fixed)
+		fixed = w;
+	return fixed;
+}
+
+static void commit_buffer(struct wsk_state *state, int scale,
+		uint32_t buf_w, uint32_t buf_h, bool paint_content, int x_offset) {
+	struct pool_buffer *buf = get_next_buffer(state->shm,
+		state->buffer_pool, buf_w * scale, buf_h * scale);
+	if (!buf)
+		return;
+	cairo_t *shm = buf->cairo;
+	cairo_save(shm);
+	cairo_set_operator(shm, CAIRO_OPERATOR_CLEAR);
+	cairo_paint(shm);
+	cairo_restore(shm);
+	if (paint_content) {
+		cairo_set_source_surface(shm, state->recording, (double)x_offset, 0.0);
+		cairo_paint(shm);
+	}
+	wl_surface_set_buffer_scale(state->surface, scale);
+	wl_surface_attach(state->surface, buf->buffer, 0, 0);
+	wl_surface_damage_buffer(state->surface, 0, 0,
+		buf_w * scale, buf_h * scale);
+	wl_surface_commit(state->surface);
+}
+
+static void render_frame_dynamic(struct wsk_state *state, int scale,
+		uint32_t width, uint32_t height);
+static void render_frame_fixed(struct wsk_state *state, int scale,
+		uint32_t width, uint32_t height);
+
 static void render_frame(struct wsk_state *state) {
 	WSK_TRACE("render_frame entry");
 	int scale = state->output ? state->output->scale : 1;
@@ -360,71 +408,52 @@ static void render_frame(struct wsk_state *state) {
 	uint32_t width = 0, height = 0;
 	render_to_cairo(cairo, state, scale, &width, &height);
 
+	if (state->fixed_width)
+		render_frame_fixed(state, scale, width, height);
+	else
+		render_frame_dynamic(state, scale, width, height);
+}
+
+static void render_frame_dynamic(struct wsk_state *state, int scale,
+		uint32_t width, uint32_t height) {
 	if (height / scale != state->height || width / scale != state->width || state->width == 0) {
 		if (width == 0 || height == 0) {
-			if (state->width && state->height) {
-				struct pool_buffer *buf = get_next_buffer(state->shm,
-					state->buffer_pool, state->width * scale, state->height * scale);
-				if (buf) {
-					cairo_t *shm = buf->cairo;
-					cairo_set_operator(shm, CAIRO_OPERATOR_CLEAR);
-					cairo_paint(shm);
-					wl_surface_set_buffer_scale(state->surface, scale);
-					wl_surface_attach(state->surface, buf->buffer, 0, 0);
-					wl_surface_damage_buffer(state->surface, 0, 0,
-						state->width * scale, state->height * scale);
-					WSK_TRACE("wl_surface_commit (path=clear)");
-					wl_surface_commit(state->surface);
-				}
-			}
+			if (state->width && state->height)
+				commit_buffer(state, scale, state->width, state->height, false, 0);
 			state->resize_pending = false;
 		} else {
 			if (!state->resize_pending) {
 				state->resize_pending = true;
 				zwlr_layer_surface_v1_set_size(state->layer_surface, width / scale, height / scale);
 			}
-			if (state->width && state->height) {
-				struct pool_buffer *buf = get_next_buffer(state->shm,
-					state->buffer_pool, state->width * scale, state->height * scale);
-				if (buf) {
-					cairo_t *shm = buf->cairo;
-					cairo_save(shm);
-					cairo_set_operator(shm, CAIRO_OPERATOR_CLEAR);
-					cairo_paint(shm);
-					cairo_restore(shm);
-					cairo_set_source_surface(shm, state->recording, 0.0, 0.0);
-					cairo_paint(shm);
-					wl_surface_set_buffer_scale(state->surface, scale);
-					wl_surface_attach(state->surface, buf->buffer, 0, 0);
-					wl_surface_damage_buffer(state->surface, 0, 0,
-						state->width * scale, state->height * scale);
-					WSK_TRACE("wl_surface_commit (path=resize)");
-					wl_surface_commit(state->surface);
-				}
-			}
+			if (state->width && state->height)
+				commit_buffer(state, scale, state->width, state->height, true, 0);
 		}
 	} else if (height > 0) {
-		struct pool_buffer *buf = get_next_buffer(state->shm,
-			state->buffer_pool, state->width * scale, state->height * scale);
-		if (!buf) {
-			return;
+		commit_buffer(state, scale, state->width, state->height, true, 0);
+	}
+}
+
+static void render_frame_fixed(struct wsk_state *state, int scale,
+		uint32_t width, uint32_t height) {
+	if (height == 0) {
+		if (state->width && state->height)
+			commit_buffer(state, scale, state->width, state->height, false, 0);
+		state->resize_pending = false;
+		return;
+	}
+	uint32_t target_h = height / scale;
+	if (state->height != target_h || state->width != (uint32_t)state->fixed_width) {
+		if (!state->resize_pending) {
+			state->resize_pending = true;
+			zwlr_layer_surface_v1_set_size(state->layer_surface,
+				state->fixed_width, target_h);
 		}
-		cairo_t *shm = buf->cairo;
-
-		cairo_save(shm);
-		cairo_set_operator(shm, CAIRO_OPERATOR_CLEAR);
-		cairo_paint(shm);
-		cairo_restore(shm);
-
-		cairo_set_source_surface(shm, state->recording, 0.0, 0.0);
-		cairo_paint(shm);
-
-		wl_surface_set_buffer_scale(state->surface, scale);
-		wl_surface_attach(state->surface, buf->buffer, 0, 0);
-		wl_surface_damage_buffer(state->surface, 0, 0,
-			state->width * scale, state->height * scale);
-		WSK_TRACE("wl_surface_commit (path=normal)");
-		wl_surface_commit(state->surface);
+		if (state->width && state->height)
+			commit_buffer(state, scale, state->width, state->height, true, 0);
+	} else {
+		int x_off = state->fixed_width * scale - (int)width;
+		commit_buffer(state, scale, state->fixed_width, state->height, true, x_off);
 	}
 }
 
@@ -1193,6 +1222,7 @@ int main(int argc, char *argv[]) {
 	state.font = DEFAULT_FONT;
 	state.timeout = 200;
 	state.length_limit = 100;
+	state.fixed_width = 0;
 	state.ctrl_l_hold = 0;
 	state.ctrl_r_hold = 0;
 	state.alt_l_hold = 0;
@@ -1218,10 +1248,13 @@ int main(int argc, char *argv[]) {
 
 	int c;
 	opterr = 0;
-	while ((c = getopt(argc, argv, "hib:f:s:r:F:t:a:m:o:l:D:H:PRO::")) != -1) {
+	while ((c = getopt(argc, argv, "hib:f:s:r:F:t:a:m:o:l:w::D:H:PRO::")) != -1) {
 		switch (c) {
 			case 'l':
 				state.length_limit = (int)strtol(optarg, NULL, 10);
+				break;
+			case 'w':
+				state.fixed_width = optarg ? (int)strtol(optarg, NULL, 10) : -1;
 				break;
 			case 'b':
 				state.background = parse_color(optarg);
@@ -1290,10 +1323,13 @@ int main(int argc, char *argv[]) {
 			case '?':
 				fprintf(stderr, "usage: wshowkeys [-b|-f|-s|-r #RRGGBB[AA]] [-F font] "
 						"[-t timeout]\n\t[-a top|left|right|bottom] [-m margin] "
-						"[-o output] [-l numOfLengthLimit] [-H padding] [-i] [-P] [-R] [-O [opacity]]");
+						"[-o output] [-l numOfLengthLimit] [-w pixels] [-H padding] [-i] [-P] [-R] [-O [opacity]]");
 				return 1;
 		}
 	}
+
+	if (state.fixed_width != 0)
+		state.fixed_width = compute_fixed_width(&state);
 
 	if (opacity_arg) {
 		float val = strtof(opacity_arg, NULL);
@@ -1582,7 +1618,6 @@ int main(int argc, char *argv[]) {
 			/* Clear out old keys */
 			struct timespec now;
 			struct wsk_keypress *key = state.keys;
-			int all_key_len = 0;
 
 			clock_gettime(CLOCK_MONOTONIC, &now);
 			long elapsed_ns =
@@ -1597,6 +1632,7 @@ int main(int argc, char *argv[]) {
 					mask_reset(&state.mask);
 				}
 			} else {
+				int all_key_len = 0;
 				const char *prev_display = NULL;
 				while (key) {
 					const char *display;
@@ -1606,23 +1642,38 @@ int main(int argc, char *argv[]) {
 						const KeymapEntry *entry = keymap_entry(key->name);
 						if (entry) {
 							display = entry->display ? entry->display
-										 : (key->utf8[0] ? key->utf8 : key->name);
+								 : (key->utf8[0] ? key->utf8 : key->name);
 						} else if (key->utf8[0]) {
 							display = key->utf8;
 						} else {
 							display = key->name;
 						}
 					}
-				size_t prev_len = prev_display ? strlen(prev_display) : 0;
-				const char *pad_before = (prev_len > 0 && prev_display[prev_len - 1] == '+')
-								 ? ""
-								 : KEY_PAD_BEFORE;
-					all_key_len += strlen(pad_before) + strlen(display) + strlen(KEY_PAD_AFTER);
+					if (state.fixed_width && state.recording_cairo) {
+						size_t prev_len = prev_display ? strlen(prev_display) : 0;
+						const char *pad_before = (prev_len > 0 && prev_display[prev_len - 1] == '+')
+										 ? ""
+										 : KEY_PAD_BEFORE;
+						int kw = 0, kh = 0;
+						int cur_scale = state.output ? state.output->scale : 1;
+						get_text_size(state.recording_cairo, state.font,
+							&kw, &kh, NULL, cur_scale,
+							"%s%s%s", pad_before, display, KEY_PAD_AFTER);
+						all_key_len += kw;
+					} else {
+						size_t prev_len = prev_display ? strlen(prev_display) : 0;
+						const char *pad_before = (prev_len > 0 && prev_display[prev_len - 1] == '+')
+										 ? ""
+										 : KEY_PAD_BEFORE;
+						all_key_len += strlen(pad_before) + strlen(display) + strlen(KEY_PAD_AFTER);
+					}
 					prev_display = display;
-					struct wsk_keypress *next = key->next;
-					key = next;
+					key = key->next;
 				}
-				if (all_key_len > state.length_limit) {
+				int limit = state.fixed_width
+					? state.fixed_width * (state.output ? state.output->scale : 1)
+					: state.length_limit;
+				if (all_key_len > limit) {
 					key = state.keys;
 					struct wsk_keypress *next = key->next;
 					free(key);

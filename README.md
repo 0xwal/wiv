@@ -52,7 +52,7 @@ After that, run `./build/wiv` directly — no root or setuid required.
 ```
 wiv [-b|-f|-s #RRGGBB[AA]] [-F font] [-t timeout]
     [-a top|left|right|bottom] [-m margin] [-l lenmax]
-    [-o output] [-i] [-H height] [-D trace] [-P] [-R]
+    [-o output] [-w [pixels]] [-i] [-H height] [-D trace] [-P] [-R]
     [-O opacity]
 ```
 
@@ -66,6 +66,10 @@ wiv [-b|-f|-s #RRGGBB[AA]] [-F font] [-t timeout]
   twice.
 - *-m margin*: set a margin (in pixels) from the nearest edge
 - *-l lenmax*: set the key layer lenmax
+- *-w [pixels]*: use a fixed overlay width instead of resizing per keystroke.
+  Without a value, width is computed from `-l` and the current font via Pango.
+  With a value, width is `max(pixels, font-computed width for -l)`.
+  Text is right-aligned; the overlay hides when empty.
 - *-o output*: show only on the specified monitor by name ex: -o eDP-1
 - *-i*: inspect mode — show raw xkb keysym names instead of pretty-printed display names
 - *-H height*: vertical padding per key row in px (added above/below text, default: 100)
@@ -94,5 +98,5 @@ to set the initial opacity, or adjust a running instance with `wiv -O <value>`.
 
 example:
 ```bash
-wiv -a bottom -F 'Sans Bold 30' -s '#B5B520ff' -f  '#ecd29cff' -b '#201B1488' -l 60
+wiv -a bottom -F 'Sans Bold 30' -s '#B5B520ff' -f  '#ecd29cff' -b '#201B1488' -l 60 -w
 ```
