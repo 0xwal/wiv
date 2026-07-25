@@ -1333,7 +1333,7 @@ int main(int argc, char *argv[]) {
 
 	if (opacity_arg) {
 		float val = strtof(opacity_arg, NULL);
-		if (val < 0.0f) val = 0.0f;
+		if (val < 0.01f) val = 0.01f;
 		if (val > 1.0f) val = 1.0f;
 		state.opacity = val;
 	}
@@ -1410,7 +1410,7 @@ int main(int argc, char *argv[]) {
 					pos++;
 				}
 				if (pos > 0) {
-					printf("%s", buf);
+					printf("%s\n", buf);
 				}
 				close(conn_fd);
 				close(state.sock_fd);
@@ -1770,7 +1770,7 @@ int main(int argc, char *argv[]) {
 						} else if (argbuf[0] == '+') {
 							state.opacity += strtof(argbuf + 1, NULL);
 							if (state.opacity > 1.0f) state.opacity = 1.0f;
-							if (state.opacity < 0.0f) state.opacity = 0.0f;
+							if (state.opacity < 0.01f) state.opacity = 0.01f;
 							char resp[32];
 							int len = snprintf(resp, sizeof(resp), "%g", state.opacity);
 							write(client_fd, resp, len);
@@ -1779,7 +1779,7 @@ int main(int argc, char *argv[]) {
 						} else if (argbuf[0] == '-') {
 							state.opacity -= strtof(argbuf + 1, NULL);
 							if (state.opacity > 1.0f) state.opacity = 1.0f;
-							if (state.opacity < 0.0f) state.opacity = 0.0f;
+							if (state.opacity < 0.01f) state.opacity = 0.01f;
 							char resp[32];
 							int len = snprintf(resp, sizeof(resp), "%g", state.opacity);
 							write(client_fd, resp, len);
@@ -1788,7 +1788,7 @@ int main(int argc, char *argv[]) {
 						} else {
 							state.opacity = strtof(argbuf, NULL);
 							if (state.opacity > 1.0f) state.opacity = 1.0f;
-							if (state.opacity < 0.0f) state.opacity = 0.0f;
+							if (state.opacity < 0.01f) state.opacity = 0.01f;
 							char resp[32];
 							int len = snprintf(resp, sizeof(resp), "%g", state.opacity);
 							write(client_fd, resp, len);

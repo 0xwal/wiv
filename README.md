@@ -76,12 +76,13 @@ wiv [-b|-f|-s #RRGGBB[AA]] [-F font] [-t timeout]
 - *-P*: pause — start paused or pause an already-running instance
 - *-R*: resume — start normally or resume an already-running instance
 - *-D trace*: trace file path for debug logging (debug build only)
-- *-O opacity*: set global opacity (0.0–1.0). Multiplies the alpha channel of all colors.
-  When running a second instance, communicates with the active instance:
-  - `wiv -O 0.5` — set opacity to 50%
-  - `wiv -O` — query current opacity
-  - `wiv -O "+.1"` — increment opacity by 10%
-  - `wiv -O "-.1"` — decrement opacity by 10%
+- *-O [opacity]*: set global opacity (0.0–1.0). Multiplies the alpha channel of all colors.
+  The value must be attached directly to `-O` (no space). When running a second
+  instance, communicates with the active instance:
+  - `wiv -O.5` — set opacity to 50%
+  - `wiv -O` — query current opacity (prints value and exits)
+  - `wiv -O"+.1"` — increment opacity by 10%
+  - `wiv -O"-.1"` — decrement opacity by 10%
 
 **Environment:**
 - *WIV_MASK*: comma-separated key sequence patterns to suppress/sensitive
@@ -93,8 +94,9 @@ Use `wiv -P` to pause a running instance (clears displayed keys, freezes
 the overlay with near-zero CPU usage). Use `wiv -R` to resume it.
 
 **Opacity:**
-wiv supports live opacity control via IPC. Launch with `-O <value>` (0.0–1.0)
-to set the initial opacity, or adjust a running instance with `wiv -O <value>`.
+wiv supports live opacity control via IPC. Launch with `-O<value>` (0.0–1.0)
+to set the initial opacity, or adjust a running instance with `wiv -O<value>`.
+(The value must be attached directly — no space between `-O` and the number.)
 
 example:
 ```bash
