@@ -378,9 +378,11 @@ static void render_frame(struct wsk_state *state) {
 				}
 			}
 			state->resize_pending = false;
-		} else if (!state->resize_pending) {
-			state->resize_pending = true;
-			zwlr_layer_surface_v1_set_size(state->layer_surface, width / scale, height / scale);
+		} else {
+			if (!state->resize_pending) {
+				state->resize_pending = true;
+				zwlr_layer_surface_v1_set_size(state->layer_surface, width / scale, height / scale);
+			}
 			if (state->width && state->height) {
 				struct pool_buffer *buf = get_next_buffer(state->shm,
 					state->buffer_pool, state->width * scale, state->height * scale);
@@ -478,6 +480,7 @@ static void layer_surface_configure(void *data, struct zwlr_layer_surface_v1 *zw
 	state->width = width;
 	state->height = height;
 	state->resize_pending = false;
+	set_dirty(state);
 	zwlr_layer_surface_v1_ack_configure(zwlr_layer_surface_v1, serial);
 }
 
@@ -950,6 +953,7 @@ static void handle_libinput_event(struct wsk_state *state, struct libinput_event
 				clock_gettime(CLOCK_MONOTONIC, &state->last_key);
 				return;
 			}
+			free(keypress);
 			break;
 		case LIBINPUT_KEY_STATE_PRESSED:
 			//if 'ctrl shift alt super' press,mark it's press state
