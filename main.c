@@ -874,13 +874,16 @@ static int append_key_with_modifiers(struct wsk_state *state, struct wsk_keypres
 		link = &(*link)->next;
 	int n = 0;
 
+	int *last_hold = NULL;
 	for (int i = 0; i < 10; i++) {
-		if (*modifier_hold_ptr(state, i)) {
+		int *hp = modifier_hold_ptr(state, i);
+		if (*hp && hp != last_hold) {
 			struct wsk_keypress *tk = safe_calloc(1, sizeof(struct wsk_keypress));
 			strcpy(tk->name, modifier_display_name(i));
 			*link = tk;
 			link = &(*link)->next;
 			n++;
+			last_hold = hp;
 		}
 	}
 
@@ -1034,13 +1037,16 @@ static void handle_libinput_event(struct wsk_state *state, struct libinput_event
 				char *combo = state->current_combination_key;
 				size_t combo_left = sizeof(state->current_combination_key);
 				int n;
+				int *last_hold = NULL;
 				for (int i = 0; i < 10; i++) {
-					if (*modifier_hold_ptr(state, i) && combo_left > 1) {
+					int *hp = modifier_hold_ptr(state, i);
+					if (*hp && hp != last_hold && combo_left > 1) {
 						n = snprintf(combo, combo_left, "%s", modifier_display_name(i));
 						if (n >= (int) combo_left)
 							n = (int) combo_left - 1;
 						combo += n;
 						combo_left -= n;
+						last_hold = hp;
 					}
 				}
 				if (combo_left > 1)
@@ -1068,14 +1074,17 @@ static void handle_libinput_event(struct wsk_state *state, struct libinput_event
 					}
 				} else {
 					// === FIRST PRESS PATH: add modifier nodes + main key ===
+					last_hold = NULL;
 					for (int i = 0; i < 10; i++) {
-						if (*modifier_hold_ptr(state, i)) {
+						int *hp = modifier_hold_ptr(state, i);
+						if (*hp && hp != last_hold) {
 							struct wsk_keypress *temp_keypress =
 								safe_calloc(1, sizeof(struct wsk_keypress));
 							strcpy(temp_keypress->name, modifier_display_name(i));
 							special_key_num++;
 							*link = temp_keypress;
 							link = &(*link)->next;
+							last_hold = hp;
 						}
 					}
 
