@@ -24,10 +24,10 @@
         mesonFlags = [ "-Ddevpath=/dev/input/" ] ++ extraFlags;
         meta = with nixpkgs.lib; {
           description = "Displays keypresses on screen on supported Wayland compositors";
-          homepage = "https://github.com/DreamMaoMao/myshowkey";
+          homepage = "https://github.com/0xwal/wiv";
           license = licenses.gpl3Only;
           platforms = platforms.linux;
-          maintainers = [ ];
+          mainProgram = "wiv";
         };
       };
     in {
