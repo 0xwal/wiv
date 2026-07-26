@@ -1234,7 +1234,7 @@ int main(int argc, char *argv[]) {
 	state.last_was_release = true;
 	state.sock_fd = -1;
 	state.paused = false;
-	state.opacity = 1.0f;
+	state.opacity = DEFAULT_OVERLAY_OPACITY;
 	state.sock_path[0] = '\0';
 
 	int c;
