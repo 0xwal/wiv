@@ -966,6 +966,24 @@ static void mask_discard(struct wsk_state *state, struct wsk_keypress *current_k
 }
 
 //listen key keydown and record to keylink
+static void reset_input_state(struct wsk_state *state) {
+	state->ctrl_l_hold = 0;
+	state->ctrl_r_hold = 0;
+	state->alt_l_hold = 0;
+	state->alt_r_hold = 0;
+	state->super_l_hold = 0;
+	state->super_r_hold = 0;
+	state->shift_l_hold = 0;
+	state->shift_r_hold = 0;
+	state->key_held = false;
+	state->repeat_state = 0;
+	state->last_was_release = true;
+	state->combination_key_repetition = 1;
+	memset(state->prev_combination_key, 0, sizeof(state->prev_combination_key));
+	memset(state->current_combination_key, 0, sizeof(state->current_combination_key));
+	clock_gettime(CLOCK_MONOTONIC, &state->last_key);
+}
+
 static void handle_libinput_event(struct wsk_state *state, struct libinput_event *event) {
 	if (!state->xkb_state) {
 		return;
@@ -1276,25 +1294,14 @@ int main(int argc, char *argv[]) {
 	state.timeout = DEFAULT_TIMEOUT;
 	state.length_limit = DEFAULT_LENGTH_LIMIT;
 	state.fixed_width = 0;
-	state.ctrl_l_hold = 0;
-	state.ctrl_r_hold = 0;
-	state.alt_l_hold = 0;
-	state.alt_r_hold = 0;
-	state.super_l_hold = 0;
-	state.super_r_hold = 0;
-	state.shift_l_hold = 0;
-	state.shift_r_hold = 0;
-	state.combination_key_repetition = 1;
-	state.key_held = false;
+	reset_input_state(&state);
 	state.last_repeat_time.tv_sec = 0;
 	state.last_repeat_time.tv_nsec = 0;
-	state.repeat_state = 0;
 	state.repeat_threshold = REPEAT_THRESHOLD_DEFAULT;
 	state.min_height = DISPLAY_MIN_HEIGHT;
 	state.mask = (struct mask_state) {0};
 	state.inspect = false;
 	state.resize_pending = false;
-	state.last_was_release = true;
 	state.sock_fd = -1;
 	state.paused = false;
 	state.opacity = DEFAULT_OVERLAY_OPACITY;
@@ -1849,12 +1856,20 @@ int main(int argc, char *argv[]) {
 				ssize_t _nr = read(client_fd, &cmd, 1);
 				if (_nr == 1) {
 					if (cmd == 'P') {
-						clear_full_keylink(state.keys, &state);
-						state.paused = true;
+					clear_full_keylink(state.keys, &state);
+					reset_input_state(&state);
+					state.paused = true;
 						if (surface_is_configured(&state) && state.surface) {
 							render_frame(&state);
 						}
 					} else if (cmd == 'R') {
+						// Recreate xkb_state to clear any stale modifier state
+						// from events dropped during pause
+						xkb_state_unref(state.xkb_state);
+						state.xkb_state = xkb_state_new(state.xkb_keymap);
+						if (!state.xkb_state) {
+							fprintf(stderr, "Failed to recreate xkb_state on resume\n");
+						}
 						state.paused = false;
 					} else if (cmd == 'O') {
 						char argbuf[16] = {0};
