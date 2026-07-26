@@ -1,11 +1,11 @@
-# wiv — Wayland Input Visual
+# wiv — Wayland Input Visualizer
 
 Displays keypresses on screen on supported Wayland compositors (requires
 `wlr_layer_shell_v1` support).
 
 https://github.com/user-attachments/assets/285463b6-3560-42e1-b59a-d565bed25464
 
-Forked from [~sircmpwn/wshowkeys](https://git.sr.ht/~sircmpwn/wshowkeys) | [DreamMaoMao/wshowkeys](https://github.com/DreamMaoMao/wshowkeys) — wiv is a continuation. credits goes to them
+Forked from [~sircmpwn/wshowkeys](https://git.sr.ht/~sircmpwn/wshowkeys) / [DreamMaoMao/wshowkeys](https://github.com/DreamMaoMao/wshowkeys) — WIV is tailored to my preferences. Credit goes to the original authors.
 
 ## Installation
 
