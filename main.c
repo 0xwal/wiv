@@ -96,6 +96,7 @@ struct wsk_state {
 	int length_limit;
 	int fixed_width; /* 0=dynamic resize per keystroke, >0=fixed logical pixels */
 	uint32_t min_height;
+	int repeat_threshold;
 
 	struct wl_display *display;
 	struct wl_registry *registry;
@@ -830,10 +831,10 @@ static void attach_repeat_flag(struct wsk_state *state, int num, int num_len) {
 /* Generate a synthetic repeat for a held key */
 static void generate_held_key_repeat(struct wsk_state *state) {
 	int del_charnum = calculate_del_charnum_of_int(state->combination_key_repetition);
-	if (state->combination_key_repetition > 2)
+	if (state->combination_key_repetition > state->repeat_threshold - 1)
 		del_last_key(state, del_charnum);
 	state->combination_key_repetition++;
-	if (state->combination_key_repetition > 2) {
+	if (state->combination_key_repetition > state->repeat_threshold - 1) {
 		int add_charnum = calculate_add_charnum_of_int(state->combination_key_repetition);
 		attach_repeat_flag(state, state->combination_key_repetition, add_charnum);
 	}
@@ -1114,18 +1115,18 @@ static void handle_libinput_event(struct wsk_state *state, struct libinput_event
 				if (strcmp(state->prev_combination_key, "") != 0 &&
 				    strcmp(state->prev_combination_key, state->current_combination_key) == 0) {
 					// === REPEAT PATH ===
-					if (state->combination_key_repetition < 2) {
+					if (state->combination_key_repetition < state->repeat_threshold - 1) {
 						// 2nd press: add key node (no counter yet)
 						*link = keypress;
 					} else {
 						// 3rd+ press: counter shows, don't add key node
 						free(keypress);
-						if (state->combination_key_repetition > 2)
+						if (state->combination_key_repetition > state->repeat_threshold - 1)
 							del_last_key(state, calculate_del_charnum_of_int(
 										    state->combination_key_repetition));
 					}
 					state->combination_key_repetition++;
-					if (state->combination_key_repetition > 2) {
+					if (state->combination_key_repetition > state->repeat_threshold - 1) {
 						int add_charnum =
 							calculate_add_charnum_of_int(state->combination_key_repetition);
 						attach_repeat_flag(state, state->combination_key_repetition,
@@ -1277,6 +1278,7 @@ int main(int argc, char *argv[]) {
 	state.last_repeat_time.tv_sec = 0;
 	state.last_repeat_time.tv_nsec = 0;
 	state.repeat_state = 0;
+	state.repeat_threshold = REPEAT_THRESHOLD_DEFAULT;
 	state.min_height = DISPLAY_MIN_HEIGHT;
 	state.mask = (struct mask_state) {0};
 	state.inspect = false;
@@ -1289,7 +1291,7 @@ int main(int argc, char *argv[]) {
 
 	int c;
 	opterr = 0;
-	while ((c = getopt(argc, argv, "hibcf:s:r:F:t:a:m:o:l:w::p::D:H:PRKO::d")) != -1) {
+	while ((c = getopt(argc, argv, "hibcf:s:r:F:t:a:m:o:l:w::p::D:H:PRKO::dx:")) != -1) {
 		switch (c) {
 			case 'l':
 				state.length_limit = (int) strtol(optarg, nullptr, 10);
@@ -1382,6 +1384,9 @@ int main(int argc, char *argv[]) {
 						runtime_pool[i] = COLOR_POOL[i];
 					runtime_pool_count = COLOR_POOL_COUNT;
 				}
+				break;
+			case 'x':
+				state.repeat_threshold = atoi(optarg);
 				break;
 			case 'd':
 				state.backspace_delete = true;

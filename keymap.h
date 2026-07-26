@@ -34,6 +34,7 @@ constexpr int32_t DEFAULT_LENGTH_LIMIT = 20;
 constexpr double REPEAT_FONT_SCALE = 0.5;
 constexpr int32_t REPEAT_DELAY = 250;  /* ms */
 constexpr int32_t REPEAT_RATE = 40;    /* ms */
+constexpr int32_t REPEAT_THRESHOLD_DEFAULT = 3;
 
 #define TEXT_ALIGN_BOTTOM
 
