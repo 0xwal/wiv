@@ -1212,7 +1212,7 @@ int main(int argc, char *argv[]) {
 	state.foreground = COLOR_FOREGROUND;
 	state.font = DEFAULT_FONT;
 	state.timeout = DEFAULT_TIMEOUT;
-	state.length_limit = DEFAULT_LEGNTH_LIMIT;
+	state.length_limit = DEFAULT_LENGTH_LIMIT;
 	state.fixed_width = 0;
 	state.ctrl_l_hold = 0;
 	state.ctrl_r_hold = 0;
