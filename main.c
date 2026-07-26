@@ -147,6 +147,7 @@ struct wsk_state {
 	cairo_surface_t *recording;
 	cairo_t *recording_cairo;
 	cairo_font_options_t *font_options;
+	bool backspace_delete;
 	struct mask_state mask;
 
 	enum { OUTPUT_DEFAULT, OUTPUT_PINNED } output_mode;
@@ -234,8 +235,7 @@ static cairo_subpixel_order_t to_cairo_subpixel_order(enum wl_output_subpixel su
 
 static uint32_t parse_color(const char *color);
 
-static inline uint32_t get_pool_color(size_t position, uint32_t fallback)
-{
+static inline uint32_t get_pool_color(size_t position, uint32_t fallback) {
 	if (!pool_enabled || runtime_pool_count == 0)
 		return fallback;
 	return parse_color(runtime_pool[position % runtime_pool_count]);
@@ -298,7 +298,8 @@ static void render_to_cairo(cairo_t *cairo, struct wsk_state *state, int scale, 
 			if (entry->fg && !POOL_OVERRIDES_FG) {
 				color = parse_color(entry->fg);
 			} else {
-				color = get_pool_color(position, entry->fg ? parse_color(entry->fg) : state->foreground);
+				color = get_pool_color(position,
+						       entry->fg ? parse_color(entry->fg) : state->foreground);
 			}
 			display = entry->display ? entry->display : (key->utf8[0] ? key->utf8 : key->name);
 		} else if (key->utf8[0]) {
@@ -776,6 +777,19 @@ static void del_last_key(struct wsk_state *state, int n) {
 	}
 }
 
+static void strip_repeat_nodes(struct wsk_state *state) {
+	struct wsk_keypress **link = &state->keys;
+	while (*link) {
+		if ((*link)->is_repeat) {
+			struct wsk_keypress *to_free = *link;
+			*link = to_free->next;
+			free(to_free);
+		} else {
+			link = &(*link)->next;
+		}
+	}
+}
+
 static void attach_to_last(struct wsk_state *state, struct wsk_keypress *key) {
 	struct wsk_keypress **attach = &state->keys;
 	//get the end of the output keylink
@@ -997,8 +1011,7 @@ static void handle_libinput_event(struct wsk_state *state, struct libinput_event
 				int mask_result = mask_check(&state->mask, keypress);
 
 				// Backspace while pattern buffer active — pop last
-				if (state->mask.buffer_len > 0 && (strcmp(keypress->name, "BackSpace") == 0 ||
-								   strcmp(keypress->name, "Delete") == 0)) {
+				if (state->mask.buffer_len > 0 && strcmp(keypress->name, "BackSpace") == 0) {
 					struct wsk_keypress *last = state->mask.buffer[state->mask.buffer_len - 1];
 					free(last);
 					state->mask.buffer_len--;
@@ -1008,6 +1021,23 @@ static void handle_libinput_event(struct wsk_state *state, struct libinput_event
 							if (state->mask.matched[p] > 0)
 								state->mask.matched[p]--;
 						}
+					}
+					free(keypress);
+					state->last_was_release = (key_state == LIBINPUT_KEY_STATE_RELEASED);
+					clock_gettime(CLOCK_MONOTONIC, &state->last_key);
+					return;
+				}
+
+				// Backspace-delete: remove last rendered key when mask is not active
+				if (state->backspace_delete && state->mask.buffer_len == 0 &&
+				    (strcmp(keypress->name, "BackSpace") == 0)) {
+					if (state->keys) {
+						strip_repeat_nodes(state);
+						del_last_key(state, 1);
+						memset(state->prev_combination_key, 0,
+						       sizeof(state->prev_combination_key));
+						state->combination_key_repetition = 0;
+						set_dirty(state);
 					}
 					free(keypress);
 					state->last_was_release = (key_state == LIBINPUT_KEY_STATE_RELEASED);
@@ -1120,8 +1150,8 @@ static void handle_libinput_event(struct wsk_state *state, struct libinput_event
 					*link = keypress;
 					special_key_num++;
 
-					memset(state->prev_combination_key, 0, sizeof(state->prev_combination_key));
-					strcat(state->prev_combination_key, state->current_combination_key);
+					snprintf(state->prev_combination_key, sizeof(state->prev_combination_key), "%s",
+						 state->current_combination_key);
 					state->combination_key_repetition = 1;
 				}
 			}
@@ -1259,7 +1289,7 @@ int main(int argc, char *argv[]) {
 
 	int c;
 	opterr = 0;
-	while ((c = getopt(argc, argv, "hibcf:s:r:F:t:a:m:o:l:w::p::D:H:PRKO::")) != -1) {
+	while ((c = getopt(argc, argv, "hibcf:s:r:F:t:a:m:o:l:w::p::D:H:PRKO::d")) != -1) {
 		switch (c) {
 			case 'l':
 				state.length_limit = (int) strtol(optarg, nullptr, 10);
@@ -1352,6 +1382,9 @@ int main(int argc, char *argv[]) {
 						runtime_pool[i] = COLOR_POOL[i];
 					runtime_pool_count = COLOR_POOL_COUNT;
 				}
+				break;
+			case 'd':
+				state.backspace_delete = true;
 				break;
 			case '?':
 				fprintf(stderr, "usage: wshowkeys [-b|-f|-s|-r #RRGGBB[AA]] [-F font] "
