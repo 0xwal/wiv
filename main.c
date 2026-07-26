@@ -25,6 +25,15 @@
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
 #include "xdg-output-unstable-v1-client-protocol.h"
 
+static const size_t COLOR_POOL_COUNT = sizeof(COLOR_POOL) / sizeof(COLOR_POOL[0]);
+
+#define MAX_POOL_COLORS 32
+
+static bool pool_enabled = false;
+static const char *runtime_pool[MAX_POOL_COLORS];
+static size_t runtime_pool_count = 0;
+static char *pool_input_buf = nullptr;
+
 #ifdef WSK_DEBUG
 static FILE *trace_file = nullptr;
 #define WSK_TRACE(fmt, ...)                                                                                            \
@@ -223,8 +232,14 @@ static cairo_subpixel_order_t to_cairo_subpixel_order(enum wl_output_subpixel su
 }
 
 
-//change default keyname to custom name
 static uint32_t parse_color(const char *color);
+
+static inline uint32_t get_pool_color(size_t position, uint32_t fallback)
+{
+	if (!pool_enabled || runtime_pool_count == 0)
+		return fallback;
+	return parse_color(runtime_pool[position % runtime_pool_count]);
+}
 
 static const KeymapEntry *keymap_entry(const char *name) {
 	const KeymapEntry *e = config_lookup(name);
@@ -270,6 +285,7 @@ static void render_to_cairo(cairo_t *cairo, struct wsk_state *state, int scale, 
 	/* Second pass: draw keys with vertical alignment offset */
 	struct wsk_keypress *key = state->keys;
 	const char *prev_display = nullptr;
+	size_t position = 0;
 	while (key) {
 		const KeymapEntry *entry = keymap_entry(key->name);
 		const char *display;
@@ -279,14 +295,18 @@ static void render_to_cairo(cairo_t *cairo, struct wsk_state *state, int scale, 
 			display = key->name;
 			color = state->specialfg;
 		} else if (entry) {
-			color = entry->fg ? parse_color(entry->fg) : state->foreground;
+			if (entry->fg && !POOL_OVERRIDES_FG) {
+				color = parse_color(entry->fg);
+			} else {
+				color = get_pool_color(position, entry->fg ? parse_color(entry->fg) : state->foreground);
+			}
 			display = entry->display ? entry->display : (key->utf8[0] ? key->utf8 : key->name);
 		} else if (key->utf8[0]) {
 			display = key->utf8;
-			color = state->foreground;
+			color = get_pool_color(position, state->foreground);
 		} else {
 			display = key->name;
-			color = state->foreground;
+			color = get_pool_color(position, state->foreground);
 		}
 
 		if (key->is_repeat) {
@@ -318,6 +338,7 @@ static void render_to_cairo(cairo_t *cairo, struct wsk_state *state, int scale, 
 			*height = target_h;
 		prev_display = display;
 		key = key->next;
+		position++;
 	}
 }
 
@@ -1238,7 +1259,7 @@ int main(int argc, char *argv[]) {
 
 	int c;
 	opterr = 0;
-	while ((c = getopt(argc, argv, "hibcf:s:r:F:t:a:m:o:l:w::D:H:PRKO::")) != -1) {
+	while ((c = getopt(argc, argv, "hibcf:s:r:F:t:a:m:o:l:w::p::D:H:PRKO::")) != -1) {
 		switch (c) {
 			case 'l':
 				state.length_limit = (int) strtol(optarg, nullptr, 10);
@@ -1316,11 +1337,27 @@ int main(int argc, char *argv[]) {
 			case 'K':
 				want_reload = true;
 				break;
+			case 'p':
+				pool_enabled = true;
+				if (optarg) {
+					pool_input_buf = strdup(optarg);
+					char *token = strtok(pool_input_buf, ",");
+					runtime_pool_count = 0;
+					while (token && runtime_pool_count < MAX_POOL_COLORS) {
+						runtime_pool[runtime_pool_count++] = token;
+						token = strtok(NULL, ",");
+					}
+				} else {
+					for (size_t i = 0; i < COLOR_POOL_COUNT && i < MAX_POOL_COLORS; i++)
+						runtime_pool[i] = COLOR_POOL[i];
+					runtime_pool_count = COLOR_POOL_COUNT;
+				}
+				break;
 			case '?':
 				fprintf(stderr, "usage: wshowkeys [-b|-f|-s|-r #RRGGBB[AA]] [-F font] "
 						"[-t timeout]\n\t[-a top|left|right|bottom] [-m margin] "
 						"[-o output] [-l numOfLengthLimit] [-w pixels] [-H padding] [-i] [-P] "
-						"[-c] [-R] [-O [opacity]] [-K]");
+						"[-c] [-R] [-O [opacity]] [-K] [-p[colors]]");
 				fprintf(stderr, "\n-c          validate keymap config and exit\n");
 				fprintf(stderr, "-K          reload keymap config\n");
 				return 1;

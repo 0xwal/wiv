@@ -23,6 +23,9 @@ constexpr uint32_t COLOR_SPECIAL_FG  = 0xebdbb240;
 constexpr uint32_t COLOR_FOREGROUND  = 0xebdbb2f0;
 constexpr uint32_t COLOR_REPEAT_FG   = 0xebdbb220;
 
+constexpr const char COLOR_POOL[][10] = {};
+constexpr bool POOL_OVERRIDES_FG = false;
+
 constexpr const char DEFAULT_FONT[] = "Sans Bold 40";
 constexpr int32_t DISPLAY_MIN_HEIGHT = 100;
 constexpr float DEFAULT_OVERLAY_OPACITY = 1.0f;
@@ -31,6 +34,8 @@ constexpr int32_t DEFAULT_LENGTH_LIMIT = 20;
 constexpr double REPEAT_FONT_SCALE = 0.5;
 constexpr int32_t REPEAT_DELAY = 250;  /* ms */
 constexpr int32_t REPEAT_RATE = 40;    /* ms */
+
+#define TEXT_ALIGN_BOTTOM
 
 typedef struct {
 	const char *name;

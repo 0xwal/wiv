@@ -53,7 +53,7 @@ After that, run `./build/wiv` directly — no root or setuid required.
 wiv [-b|-f|-s #RRGGBB[AA]] [-F font] [-t timeout]
     [-a top|left|right|bottom] [-m margin] [-l lenmax]
     [-o output] [-w [pixels]] [-i] [-H height] [-D trace] [-P] [-R]
-    [-O opacity] [-c]
+    [-O opacity] [-c] [-p[colors]]
 ```
 
 - *-b #RRGGBB[AA]*: set background color
@@ -85,6 +85,10 @@ wiv [-b|-f|-s #RRGGBB[AA]] [-F font] [-t timeout]
   - `wiv -O"-.1"` — decrement opacity by 10%
 - *-c*: validate keymap config file and exit (prints `OK` or error with line number)
 - *-K*: reload keymap config from file (sends reload signal to running instance)
+- *-p[colors]*: enable color pool. Without a value, uses the default pool from `keymap.h`.
+  With a value, overrides the pool with a comma-separated list of hex colors
+  (e.g. `-p"#ff0000,#00ff00,#0000ffAA"`). Keys without a per-key color use pool
+  colors in display order, wrapping when the pool is exhausted.
 
 **Environment:**
 - *WIV_MASK*: comma-separated key sequence patterns to suppress/sensitive
@@ -99,6 +103,28 @@ the overlay with near-zero CPU usage). Use `wiv -R` to resume it.
 wiv supports live opacity control via IPC. Launch with `-O<value>` (0.0–1.0)
 to set the initial opacity, or adjust a running instance with `wiv -O<value>`.
 (The value must be attached directly — no space between `-O` and the number.)
+
+**Color Pool:**
+The color pool assigns cycling foreground colors to keys that don't have a
+per-key color override. Define the default pool and override behavior in
+`keymap.h`:
+
+```c
+static const char COLOR_POOL[][10] = {
+    "#ff0000",
+    "#00ff00",
+    "#0000ff",
+};
+constexpr bool POOL_OVERRIDES_FG = false;
+```
+
+- `COLOR_POOL`: array of `#RRGGBB` or `#RRGGBBAA` hex strings. Leave empty to disable.
+- `POOL_OVERRIDES_FG`: when `true`, pool colors override per-key colors from
+  the keymap config. When `false` (default), per-key colors always win.
+
+Colors are assigned by display position — key #0 gets pool[0], key #1 gets
+pool[1], wrapping around. At runtime, `-p"#RRGGBBAA,#RRGGBB"` overrides the
+compile-time pool without rebuilding.
 
 example:
 ```bash
