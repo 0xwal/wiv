@@ -1211,8 +1211,8 @@ int main(int argc, char *argv[]) {
 	state.repeatfg = COLOR_REPEAT_FG;
 	state.foreground = COLOR_FOREGROUND;
 	state.font = DEFAULT_FONT;
-	state.timeout = 200;
-	state.length_limit = 100;
+	state.timeout = DEFAULT_TIMEOUT;
+	state.length_limit = DEFAULT_LEGNTH_LIMIT;
 	state.fixed_width = 0;
 	state.ctrl_l_hold = 0;
 	state.ctrl_r_hold = 0;

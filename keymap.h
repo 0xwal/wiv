@@ -24,6 +24,8 @@
 #define DEFAULT_FONT "Sans Bold 40"
 #define DISPLAY_MIN_HEIGHT 100
 #define DEFAULT_OVERLAY_OPACITY 1.0f
+#define DEFAULT_TIMEOUT 500
+#define DEFAULT_LEGNTH_LIMIT 20
 #define REPEAT_FONT_SCALE 0.5
 #define REPEAT_DELAY 250  /* ms before first repeat */
 #define REPEAT_RATE 40    /* ms between repeats (25Hz) */
