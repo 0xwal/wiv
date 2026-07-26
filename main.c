@@ -5,7 +5,6 @@
 #include <libinput.h>
 #include <libudev.h>
 #include <poll.h>
-#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,7 +26,7 @@
 #include "xdg-output-unstable-v1-client-protocol.h"
 
 #ifdef WSK_DEBUG
-static FILE *trace_file = NULL;
+static FILE *trace_file = nullptr;
 #define WSK_TRACE(fmt, ...)                                                                                            \
 	do {                                                                                                           \
 		if (trace_file) {                                                                                      \
@@ -180,7 +179,7 @@ static int *modifier_hold_ptr(struct wsk_state *state, int idx) {
 		case 9:
 			return &state->shift_r_hold;
 	}
-	return NULL;
+	return nullptr;
 }
 
 static const char *modifier_display_name(int idx) {
@@ -190,7 +189,7 @@ static const char *modifier_display_name(int idx) {
 	};
 	if (idx >= 0 && idx < 10)
 		return names[idx];
-	return NULL;
+	return nullptr;
 }
 
 static void *safe_calloc(size_t nmemb, size_t size) {
@@ -251,7 +250,7 @@ static const KeymapEntry *keymap_entry(const char *name) {
 			if (!strcmp(keymap[i].name, base))
 				return &keymap[i];
 	}
-	return NULL;
+	return nullptr;
 }
 
 //show key in keylink(begin at state->keys)
@@ -270,7 +269,7 @@ static void render_to_cairo(cairo_t *cairo, struct wsk_state *state, int scale, 
 
 	/* Second pass: draw keys with vertical alignment offset */
 	struct wsk_keypress *key = state->keys;
-	const char *prev_display = NULL;
+	const char *prev_display = nullptr;
 	while (key) {
 		const KeymapEntry *entry = keymap_entry(key->name);
 		const char *display;
@@ -299,7 +298,7 @@ static void render_to_cairo(cairo_t *cairo, struct wsk_state *state, int scale, 
 
 		const char *use_font = key->is_repeat ? state->repeat_font : state->font;
 		int w, h;
-		get_text_size(cairo, use_font, &w, &h, NULL, scale, "%s%s%s", pad_before, display, KEY_PAD_AFTER);
+		get_text_size(cairo, use_font, &w, &h, nullptr, scale, "%s%s%s", pad_before, display, KEY_PAD_AFTER);
 
 		int target_h = max_h + (int) state->min_height;
 
@@ -330,7 +329,7 @@ static int compute_fixed_width(struct wsk_state *state) {
 	memset(buf, 'W', n);
 	buf[n] = '\0';
 	int w = 0, h = 0;
-	get_text_size(cr, state->font, &w, &h, NULL, 1.0, "%s", buf);
+	get_text_size(cr, state->font, &w, &h, nullptr, 1.0, "%s", buf);
 	free(buf);
 	cairo_destroy(cr);
 	cairo_surface_destroy(tmp);
@@ -370,7 +369,7 @@ static void render_frame(struct wsk_state *state) {
 	int scale = state->output ? state->output->scale : 1;
 
 	if (!state->recording) {
-		state->recording = cairo_recording_surface_create(CAIRO_CONTENT_COLOR_ALPHA, NULL);
+		state->recording = cairo_recording_surface_create(CAIRO_CONTENT_COLOR_ALPHA, nullptr);
 		state->recording_cairo = cairo_create(state->recording);
 
 		state->font_options = cairo_font_options_create();
@@ -529,7 +528,7 @@ static const struct wl_surface_listener wl_surface_listener = {
 
 static void keyboard_keymap(void *data, struct wl_keyboard *wl_keyboard, uint32_t format, int32_t fd, uint32_t size) {
 	struct wsk_state *state = data;
-	char *map_shm = mmap(NULL, size, PROT_READ, MAP_SHARED, fd, 0);
+	char *map_shm = mmap(nullptr, size, PROT_READ, MAP_SHARED, fd, 0);
 	if (map_shm == MAP_FAILED) {
 		close(fd);
 		fprintf(stderr, "Unable to mmap keymap: %s", strerror(errno));
@@ -692,7 +691,7 @@ static void registry_global(void *data, struct wl_registry *wl_registry, uint32_
 		output->output = wl_registry_bind(wl_registry, name, &wl_output_interface, 3);
 		output->scale = 1;
 		output->name[0] = '\0';
-		output->xdg_output = NULL;
+		output->xdg_output = nullptr;
 		output->registry_name = name;
 		struct wsk_output **link = &state->outputs;
 		while (*link) {
@@ -745,9 +744,9 @@ static void del_last_key(struct wsk_state *state, int n) {
 		struct wsk_keypress **link = &state->keys;
 		while (*link) {
 			temp_keypress = &(*link)->next;
-			if ((*temp_keypress) == NULL) {
+			if ((*temp_keypress) == nullptr) {
 				free(*link);
-				*link = NULL;
+				*link = nullptr;
 			} else {
 				link = temp_keypress;
 			}
@@ -883,7 +882,7 @@ static int append_key_with_modifiers(struct wsk_state *state, struct wsk_keypres
 		link = &(*link)->next;
 	int n = 0;
 
-	int *last_hold = NULL;
+	int *last_hold = nullptr;
 	for (int i = 0; i < 10; i++) {
 		int *hp = modifier_hold_ptr(state, i);
 		if (*hp && hp != last_hold) {
@@ -897,7 +896,7 @@ static int append_key_with_modifiers(struct wsk_state *state, struct wsk_keypres
 	}
 
 	*link = kp;
-	kp->next = NULL;
+	kp->next = nullptr;
 	n++;
 	return n;
 }
@@ -1046,7 +1045,7 @@ static void handle_libinput_event(struct wsk_state *state, struct libinput_event
 				char *combo = state->current_combination_key;
 				size_t combo_left = sizeof(state->current_combination_key);
 				int n;
-				int *last_hold = NULL;
+				int *last_hold = nullptr;
 				for (int i = 0; i < 10; i++) {
 					int *hp = modifier_hold_ptr(state, i);
 					if (*hp && hp != last_hold && combo_left > 1) {
@@ -1083,7 +1082,7 @@ static void handle_libinput_event(struct wsk_state *state, struct libinput_event
 					}
 				} else {
 					// === FIRST PRESS PATH: add modifier nodes + main key ===
-					last_hold = NULL;
+					last_hold = nullptr;
 					for (int i = 0; i < 10; i++) {
 						int *hp = modifier_hold_ptr(state, i);
 						if (*hp && hp != last_hold) {
@@ -1151,7 +1150,7 @@ static uint32_t parse_color(const char *color) {
 			color);
 		return 0xFFFFFFFF;
 	}
-	uint32_t res = (uint32_t) strtoul(color, NULL, 16);
+	uint32_t res = (uint32_t) strtoul(color, nullptr, 16);
 	if (strlen(color) == 6) {
 		res = (res << 8) | 0xFF;
 	}
@@ -1175,7 +1174,7 @@ void clear_full_keylink(struct wsk_keypress *key, struct wsk_state *state) {
 	state->combination_key_repetition = 1;
 	memset(state->current_combination_key, 0, sizeof(state->current_combination_key));
 	memset(state->prev_combination_key, 0, sizeof(state->prev_combination_key));
-	state->keys = NULL;
+	state->keys = nullptr;
 	set_dirty(state);
 }
 
@@ -1202,7 +1201,7 @@ int main(int argc, char *argv[]) {
 	bool want_reload = false;
 	bool want_opacity_query = false;
 	bool validate_config = false;
-	const char *opacity_arg = NULL;
+	const char *opacity_arg = nullptr;
 
 	state.anchor = ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
 	state.margin = 32;
@@ -1242,10 +1241,10 @@ int main(int argc, char *argv[]) {
 	while ((c = getopt(argc, argv, "hibcf:s:r:F:t:a:m:o:l:w::D:H:PRKO::")) != -1) {
 		switch (c) {
 			case 'l':
-				state.length_limit = (int) strtol(optarg, NULL, 10);
+				state.length_limit = (int) strtol(optarg, nullptr, 10);
 				break;
 			case 'w':
-				state.fixed_width = optarg ? (int) strtol(optarg, NULL, 10) : -1;
+				state.fixed_width = optarg ? (int) strtol(optarg, nullptr, 10) : -1;
 				break;
 			case 'b':
 				state.background = parse_color(optarg);
@@ -1263,7 +1262,7 @@ int main(int argc, char *argv[]) {
 				state.font = optarg;
 				break;
 			case 't':
-				state.timeout = (int) strtol(optarg, NULL, 10);
+				state.timeout = (int) strtol(optarg, nullptr, 10);
 				break;
 			case 'a':
 				if (strcmp(optarg, "top") == 0) {
@@ -1277,7 +1276,7 @@ int main(int argc, char *argv[]) {
 				}
 				break;
 			case 'm':
-				state.margin = (int) strtol(optarg, NULL, 10);
+				state.margin = (int) strtol(optarg, nullptr, 10);
 				break;
 			case 'i':
 				state.inspect = true;
@@ -1297,7 +1296,7 @@ int main(int argc, char *argv[]) {
 				break;
 #endif
 			case 'H':
-				state.min_height = (uint32_t) strtol(optarg, NULL, 10);
+				state.min_height = (uint32_t) strtol(optarg, nullptr, 10);
 				break;
 			case 'P':
 				state.paused = true;
@@ -1308,7 +1307,7 @@ int main(int argc, char *argv[]) {
 				want_resume = true;
 				break;
 			case 'O':
-				want_opacity_query = (optarg == NULL);
+				want_opacity_query = (optarg == nullptr);
 				opacity_arg = optarg;
 				break;
 			case 'c':
@@ -1336,7 +1335,7 @@ int main(int argc, char *argv[]) {
 		state.fixed_width = compute_fixed_width(&state);
 
 	if (opacity_arg) {
-		float val = strtof(opacity_arg, NULL);
+		float val = strtof(opacity_arg, nullptr);
 		if (val < 0.01f)
 			val = 0.01f;
 		if (val > 1.0f)
@@ -1469,7 +1468,7 @@ int main(int argc, char *argv[]) {
 				strncpy(state.mask.patterns[state.mask.num_patterns], tok, 255);
 				state.mask.patterns[state.mask.num_patterns][255] = '\0';
 				state.mask.num_patterns++;
-				tok = strtok(NULL, ",");
+				tok = strtok(nullptr, ",");
 			}
 			free(env_copy);
 		}
@@ -1497,7 +1496,7 @@ int main(int argc, char *argv[]) {
 		goto exit;
 	}
 
-	state.display = wl_display_connect(NULL);
+	state.display = wl_display_connect(nullptr);
 	if (!state.display) {
 		fprintf(stderr, "wl_display_connect: %s\n", strerror(errno));
 		ret = 1;
@@ -1531,7 +1530,7 @@ int main(int argc, char *argv[]) {
 	wl_display_roundtrip(state.display);
 
 	// Resolve startup output for PINNED mode
-	struct wl_output *startup_output = NULL;
+	struct wl_output *startup_output = nullptr;
 	if (state.output_mode == OUTPUT_PINNED) {
 		struct wsk_output *wsk_out = state.outputs;
 		while (wsk_out) {
@@ -1551,7 +1550,7 @@ int main(int argc, char *argv[]) {
 	assert(state.surface);
 	wl_surface_add_listener(state.surface, &wl_surface_listener, &state);
 
-	struct wl_output *layer_output = NULL;
+	struct wl_output *layer_output = nullptr;
 	if (state.output_mode == OUTPUT_PINNED)
 		layer_output = startup_output;
 
@@ -1648,7 +1647,7 @@ int main(int argc, char *argv[]) {
 				}
 			} else {
 				int all_key_len = 0;
-				const char *prev_display = NULL;
+				const char *prev_display = nullptr;
 				while (key) {
 					const char *display;
 					if (state.inspect) {
@@ -1673,7 +1672,7 @@ int main(int argc, char *argv[]) {
 								: KEY_PAD_BEFORE;
 						int kw = 0, kh = 0;
 						int cur_scale = state.output ? state.output->scale : 1;
-						get_text_size(state.recording_cairo, state.font, &kw, &kh, NULL,
+						get_text_size(state.recording_cairo, state.font, &kw, &kh, nullptr,
 							      cur_scale, "%s%s%s", pad_before, display, KEY_PAD_AFTER);
 						all_key_len += kw;
 					} else {
@@ -1758,7 +1757,7 @@ int main(int argc, char *argv[]) {
 
 		/* Handle IPC socket connections (pause/resume signaling) */
 		if (npollfds == 3 && (pollfds[2].revents & POLLIN)) {
-			int client_fd = accept(state.sock_fd, NULL, NULL);
+			int client_fd = accept(state.sock_fd, nullptr, NULL);
 			if (client_fd >= 0) {
 				char cmd = 0;
 				ssize_t _nr = read(client_fd, &cmd, 1);
@@ -1787,7 +1786,7 @@ int main(int argc, char *argv[]) {
 							int len = snprintf(resp, sizeof(resp), "%g", state.opacity);
 							write(client_fd, resp, len);
 						} else if (argbuf[0] == '+') {
-							state.opacity += strtof(argbuf + 1, NULL);
+							state.opacity += strtof(argbuf + 1, nullptr);
 							if (state.opacity > 1.0f)
 								state.opacity = 1.0f;
 							if (state.opacity < 0.01f)
@@ -1798,7 +1797,7 @@ int main(int argc, char *argv[]) {
 							if (surface_is_configured(&state) && state.surface)
 								render_frame(&state);
 						} else if (argbuf[0] == '-') {
-							state.opacity -= strtof(argbuf + 1, NULL);
+							state.opacity -= strtof(argbuf + 1, nullptr);
 							if (state.opacity > 1.0f)
 								state.opacity = 1.0f;
 							if (state.opacity < 0.01f)
@@ -1809,7 +1808,7 @@ int main(int argc, char *argv[]) {
 							if (surface_is_configured(&state) && state.surface)
 								render_frame(&state);
 						} else {
-							state.opacity = strtof(argbuf, NULL);
+							state.opacity = strtof(argbuf, nullptr);
 							if (state.opacity > 1.0f)
 								state.opacity = 1.0f;
 							if (state.opacity < 0.01f)
