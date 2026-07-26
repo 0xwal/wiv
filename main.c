@@ -28,6 +28,13 @@
 static const size_t COLOR_POOL_COUNT = sizeof(COLOR_POOL) / sizeof(COLOR_POOL[0]);
 
 #define MAX_POOL_COLORS 32
+#define DEFAULT_MARGIN 32
+
+#define IPC_CMD_PAUSE   'P'
+#define IPC_CMD_RESUME  'R'
+#define IPC_CMD_OPACITY 'O'
+#define IPC_CMD_RELOAD  'K'
+#define IPC_CMD_MOVE    'M'
 
 static bool pool_enabled = false;
 static const char *runtime_pool[MAX_POOL_COLORS];
@@ -80,8 +87,11 @@ struct wsk_output {
 	enum wl_output_subpixel subpixel;
 	char name[128];
 	uint32_t registry_name;
+	int32_t x, y, logical_w, logical_h;
 	struct wsk_output *next;
 };
+
+enum text_align { TEXT_ALIGN_LEFT = 0, TEXT_ALIGN_CENTER, TEXT_ALIGN_RIGHT };
 
 struct wsk_state {
 	int devmgr;
@@ -149,6 +159,7 @@ struct wsk_state {
 	cairo_t *recording_cairo;
 	cairo_font_options_t *font_options;
 	bool backspace_delete;
+	enum text_align text_align;
 	struct mask_state mask;
 
 	enum { OUTPUT_DEFAULT, OUTPUT_PINNED } output_mode;
@@ -156,6 +167,15 @@ struct wsk_state {
 	uint32_t anchor;
 	int margin;
 	float opacity;
+
+	int32_t target_x, target_y, target_w, target_h;
+	int32_t target_slurp_w;
+	bool has_target_position;
+	bool has_explicit_margin;
+	bool has_explicit_output;
+	bool has_explicit_anchor;
+	bool has_center;
+	char target_position_arg[256];
 };
 
 static int find_modifier(const char *name) {
@@ -457,7 +477,12 @@ static void render_frame_fixed(struct wsk_state *state, int scale, uint32_t widt
 		if (state->width && state->height)
 			commit_buffer(state, scale, state->width, state->height, true, 0);
 	} else {
-		int x_off = state->fixed_width * scale - (int) width;
+		int x_off = 0;
+		if (state->text_align == TEXT_ALIGN_RIGHT) {
+			x_off = state->fixed_width * scale - (int) width;
+		} else if (state->text_align == TEXT_ALIGN_CENTER) {
+			x_off = (state->fixed_width * scale - (int) width) / 2;
+		}
 		commit_buffer(state, scale, state->fixed_width, state->height, true, x_off);
 	}
 }
@@ -678,10 +703,18 @@ static void xdg_output_handle_name(void *data, struct zxdg_output_v1 *xdg_output
 	output->name[sizeof(output->name) - 1] = '\0';
 }
 
-static void xdg_output_handle_logical_position(void *data, struct zxdg_output_v1 *xdg_output, int32_t x, int32_t y) {}
+static void xdg_output_handle_logical_position(void *data, struct zxdg_output_v1 *xdg_output, int32_t x, int32_t y) {
+	struct wsk_output *output = data;
+	output->x = x;
+	output->y = y;
+}
 
 static void xdg_output_handle_logical_size(void *data, struct zxdg_output_v1 *xdg_output, int32_t width,
-					   int32_t height) {}
+					   int32_t height) {
+	struct wsk_output *output = data;
+	output->logical_w = width;
+	output->logical_h = height;
+}
 
 static void xdg_output_handle_done(void *data, struct zxdg_output_v1 *xdg_output) {}
 
@@ -1269,6 +1302,132 @@ static const char *get_sock_path(char *buf, size_t bufsize) {
 	return buf;
 }
 
+static void compute_g_margins(uint32_t anchor, bool has_center, int32_t local_x, int32_t local_y, int32_t output_w, int32_t output_h,
+			      int32_t surf_w, int32_t surf_h, int32_t *m_top, int32_t *m_right, int32_t *m_bottom,
+			      int32_t *m_left) {
+	*m_top = 0;
+	*m_right = 0;
+	*m_bottom = 0;
+	*m_left = 0;
+	if (anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP)
+		*m_top = local_y;
+	if (anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM)
+		*m_bottom = output_h - local_y - surf_h;
+	if (has_center) {
+		*m_left = local_x - surf_w / 2;
+		*m_right = 0;
+	} else {
+		if (anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT)
+			*m_left = local_x;
+		if (anchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT)
+			*m_right = output_w - local_x - surf_w;
+	}
+}
+
+static void reposition_surface(struct wsk_state *state, int32_t global_x, int32_t global_y, int32_t w, int32_t h) {
+	if (!state->outputs)
+		return;
+
+	struct wsk_output *target = state->output;
+	struct wsk_output *out = state->outputs;
+	while (out) {
+		if (global_x >= out->x && global_x < out->x + out->logical_w && global_y >= out->y &&
+		    global_y < out->y + out->logical_h) {
+			target = out;
+			break;
+		}
+		out = out->next;
+	}
+	if (!target)
+		return;
+
+	int32_t local_x = global_x - target->x;
+	int32_t local_y = global_y - target->y;
+
+	if (target != state->output) {
+		zwlr_layer_surface_v1_destroy(state->layer_surface);
+		wl_surface_destroy(state->surface);
+
+		state->surface = wl_compositor_create_surface(state->compositor);
+		assert(state->surface);
+		wl_surface_add_listener(state->surface, &wl_surface_listener, state);
+
+		struct wl_region *input_region = wl_compositor_create_region(state->compositor);
+		wl_surface_set_input_region(state->surface, input_region);
+		wl_region_destroy(input_region);
+
+		state->layer_surface =
+			zwlr_layer_shell_v1_get_layer_surface(state->layer_shell, state->surface, target->output,
+							      ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, "showkeys");
+		assert(state->layer_surface);
+		zwlr_layer_surface_v1_add_listener(state->layer_surface, &layer_surface_listener, state);
+
+		state->width = 0;
+		state->height = 0;
+		state->resize_pending = false;
+
+		if (state->recording_cairo) {
+			cairo_destroy(state->recording_cairo);
+			state->recording_cairo = nullptr;
+		}
+		if (state->recording) {
+			cairo_surface_destroy(state->recording);
+			state->recording = nullptr;
+		}
+		if (state->font_options) {
+			cairo_font_options_destroy(state->font_options);
+			state->font_options = nullptr;
+		}
+	}
+
+	int32_t m_top, m_right, m_bottom, m_left;
+	int32_t eff_w = w > 0 ? w : (int32_t) state->width;
+	int32_t eff_h = h > 0 ? h : (int32_t) state->height;
+	uint32_t compute_anchor = state->anchor;
+	if (eff_w == 0 || eff_h == 0) {
+		compute_anchor = 0;
+		if (eff_w == 0)
+			compute_anchor |= ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
+		if (eff_h == 0)
+			compute_anchor |= ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM;
+	}
+	if (state->has_center && eff_w > 0 && eff_h > 0) {
+		compute_anchor |= ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT;
+		compute_anchor &= ~ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
+	}
+	compute_g_margins(compute_anchor, state->has_center, local_x, local_y, target->logical_w, target->logical_h, eff_w, eff_h, &m_top,
+			  &m_right, &m_bottom, &m_left);
+	zwlr_layer_surface_v1_set_anchor(state->layer_surface, compute_anchor);
+	zwlr_layer_surface_v1_set_margin(state->layer_surface, m_top, m_right, m_bottom, m_left);
+	zwlr_layer_surface_v1_set_exclusive_zone(state->layer_surface, -1);
+
+	if (w > 0 && h > 0) {
+		zwlr_layer_surface_v1_set_size(state->layer_surface, w, h);
+	}
+
+	wl_surface_commit(state->surface);
+	state->output = target;
+}
+
+static void parse_position_arg(const char *arg, int32_t *x, int32_t *y, int32_t *w, int32_t *h) {
+	char tmp[256];
+	strncpy(tmp, arg, sizeof(tmp) - 1);
+	tmp[sizeof(tmp) - 1] = '\0';
+	char *sp = strchr(tmp, ' ');
+	if (sp)
+		*sp = ',';
+	char *xsep = strchr(tmp, 'x');
+	if (!xsep)
+		xsep = strchr(tmp, 'X');
+	if (xsep)
+		*xsep = ',';
+	*x = 0;
+	*y = 0;
+	*w = 0;
+	*h = 0;
+	sscanf(tmp, "%d,%d,%d,%d", x, y, w, h);
+}
+
 int main(int argc, char *argv[]) {
 	struct wsk_state state = {0};
 	if (devmgr_start(&state.devmgr, &state.devmgr_pid, INPUTDEVPATH) > 0) {
@@ -1284,8 +1443,7 @@ int main(int argc, char *argv[]) {
 	bool validate_config = false;
 	const char *opacity_arg = nullptr;
 
-	state.anchor = ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
-	state.margin = 32;
+	state.margin = DEFAULT_MARGIN;
 	state.background = COLOR_BACKGROUND;
 	state.specialfg = COLOR_SPECIAL_FG;
 	state.repeatfg = COLOR_REPEAT_FG;
@@ -1305,17 +1463,18 @@ int main(int argc, char *argv[]) {
 	state.sock_fd = -1;
 	state.paused = false;
 	state.opacity = DEFAULT_OVERLAY_OPACITY;
+	state.text_align = TEXT_ALIGN_LEFT;
 	state.sock_path[0] = '\0';
 
 	int c;
 	opterr = 0;
-	while ((c = getopt(argc, argv, "hibcf:s:r:F:t:a:m:o:l:w::p::D:H:PRKO::dx:")) != -1) {
+	while ((c = getopt(argc, argv, "hib:cf:s:r:F:t:a:m:o:l:w:p::D:H:PRKO::dx:g:T:")) != -1) {
 		switch (c) {
 			case 'l':
 				state.length_limit = (int) strtol(optarg, nullptr, 10);
 				break;
 			case 'w':
-				state.fixed_width = optarg ? (int) strtol(optarg, nullptr, 10) : -1;
+				state.fixed_width = (int) strtol(optarg, nullptr, 10);
 				break;
 			case 'b':
 				state.background = parse_color(optarg);
@@ -1336,6 +1495,9 @@ int main(int argc, char *argv[]) {
 				state.timeout = (int) strtol(optarg, nullptr, 10);
 				break;
 			case 'a':
+				if (!state.has_explicit_anchor)
+					state.anchor = 0;
+				state.has_explicit_anchor = true;
 				if (strcmp(optarg, "top") == 0) {
 					state.anchor |= ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP;
 				} else if (strcmp(optarg, "left") == 0) {
@@ -1344,16 +1506,20 @@ int main(int argc, char *argv[]) {
 					state.anchor |= ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
 				} else if (strcmp(optarg, "bottom") == 0) {
 					state.anchor |= ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM;
+				} else if (strcmp(optarg, "center") == 0) {
+					state.has_center = true;
 				}
 				break;
 			case 'm':
 				state.margin = (int) strtol(optarg, nullptr, 10);
+				state.has_explicit_margin = true;
 				break;
 			case 'i':
 				state.inspect = true;
 				break;
 			case 'o':
 				state.output_mode = OUTPUT_PINNED;
+				state.has_explicit_output = true;
 				strncpy(state.target_output_name, optarg, sizeof(state.target_output_name) - 1);
 				break;
 #ifdef WSK_DEBUG
@@ -1395,7 +1561,7 @@ int main(int argc, char *argv[]) {
 					runtime_pool_count = 0;
 					while (token && runtime_pool_count < MAX_POOL_COLORS) {
 						runtime_pool[runtime_pool_count++] = token;
-						token = strtok(NULL, ",");
+						token = strtok(nullptr, ",");
 					}
 				} else {
 					for (size_t i = 0; i < COLOR_POOL_COUNT && i < MAX_POOL_COLORS; i++)
@@ -1404,27 +1570,68 @@ int main(int argc, char *argv[]) {
 				}
 				break;
 			case 'x':
-				state.repeat_threshold = (int) strtol(optarg, NULL, 10);
+				state.repeat_threshold = (int) strtol(optarg, nullptr, 10);
 				break;
 			case 'd':
 				state.backspace_delete = true;
 				break;
+			case 'T':
+				if (strcmp(optarg, "left") == 0)
+					state.text_align = TEXT_ALIGN_LEFT;
+				else if (strcmp(optarg, "center") == 0)
+					state.text_align = TEXT_ALIGN_CENTER;
+				else if (strcmp(optarg, "right") == 0)
+					state.text_align = TEXT_ALIGN_RIGHT;
+				else
+					fprintf(stderr, "wiv: unknown text alignment '%s', use left, center, or right\n", optarg);
+				break;
+			case 'g':
+				state.has_target_position = true;
+				strncpy(state.target_position_arg, optarg, sizeof(state.target_position_arg) - 1);
+				state.target_position_arg[sizeof(state.target_position_arg) - 1] = '\0';
+				parse_position_arg(optarg, &state.target_x, &state.target_y, &state.target_w,
+						   &state.target_h);
+				state.target_slurp_w = state.target_w;
+				break;
 			case '?':
 				fprintf(stderr, "usage: wshowkeys [-b|-f|-s|-r #RRGGBB[AA]] [-F font] "
-						"[-t timeout]\n\t[-a top|left|right|bottom] [-m margin] "
+						"[-t timeout]\n\t[-a top|left|right|bottom|center] [-m margin] "
 						"[-o output] [-l numOfLengthLimit] [-w pixels] [-H padding] [-i] [-P] "
-						"[-c] [-R] [-O [opacity]] [-K] [-p[colors]]");
+						"[-c] [-R] [-O [opacity]] [-K] [-p[colors]] [-g X,Y[,WxH]] [-T left|center|right]");
 				fprintf(stderr, "\n-c          validate keymap config and exit\n");
 				fprintf(stderr, "-K          reload keymap config\n");
+				fprintf(stderr, "-g X,Y[,WxH]  position overlay at absolute coordinates\n");
 				return 1;
 		}
+	}
+
+	if (!state.has_explicit_anchor) {
+		state.anchor = ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
+	} else {
+		bool has_vertical =
+			(state.anchor & (ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM)) != 0;
+		bool has_horizontal =
+			(state.anchor & (ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT)) != 0 || state.has_center;
+		if (!has_vertical)
+			state.anchor |= ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM;
+		if (!has_horizontal)
+			state.anchor |= ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
+	}
+
+	if (state.has_target_position) {
+		if (state.has_explicit_margin)
+			fprintf(stderr, "wiv: -m ignored when -g is used\n");
+		if (state.has_explicit_output)
+			fprintf(stderr, "wiv: -o ignored when -g is used\n");
+		if (state.fixed_width == 0 && state.target_slurp_w > 1)
+			state.fixed_width = state.target_slurp_w;
 	}
 
 	if (validate_config) {
 		return config_validate() == 0 ? 0 : 1;
 	}
 
-	if (state.fixed_width != 0)
+	if (state.fixed_width != 0 && state.target_slurp_w == 0)
 		state.fixed_width = compute_fixed_width(&state);
 
 	if (opacity_arg) {
@@ -1475,6 +1682,18 @@ int main(int argc, char *argv[]) {
 				goto exit;
 			}
 			if (connect(conn_fd, (struct sockaddr *) &addr, sizeof(addr)) == 0) {
+				if (state.has_target_position) {
+					char cmd = 'M';
+					write(conn_fd, &cmd, 1);
+					char pos_buf[64];
+					snprintf(pos_buf, sizeof(pos_buf), "%d,%d", state.target_x, state.target_y);
+					write(conn_fd, pos_buf, strlen(pos_buf));
+					char term = '\0';
+					write(conn_fd, &term, 1);
+					close(conn_fd);
+					close(state.sock_fd);
+					return 0;
+				}
 				if (want_pause) {
 					char cmd = 'P';
 					write(conn_fd, &cmd, 1);
@@ -1521,7 +1740,7 @@ int main(int argc, char *argv[]) {
 					close(state.sock_fd);
 					return 0;
 				}
-				fprintf(stderr, "wiv: already running, use one of flags -P -R -O -K, -h for help\n");
+				fprintf(stderr, "wiv: already running, use one of flags -P -R -O -K -g, -h for help\n");
 				close(conn_fd);
 				close(state.sock_fd);
 				state.sock_fd = -1;
@@ -1662,6 +1881,18 @@ int main(int argc, char *argv[]) {
 	zwlr_layer_surface_v1_set_margin(state.layer_surface, state.margin, state.margin, state.margin, state.margin);
 	zwlr_layer_surface_v1_set_exclusive_zone(state.layer_surface, -1);
 	wl_surface_commit(state.surface);
+
+	if (state.has_target_position) {
+		int32_t gx = 0, gy = 0, gw = 0, gh = 0;
+		parse_position_arg(state.target_position_arg, &gx, &gy, &gw, &gh);
+		if (gw <= 1) gw = 0;
+		if (gh <= 1) gh = 0;
+		if (state.has_center && gw > 0 && gh > 0) {
+			gx += gw / 2;
+			gy += gh / 2;
+		}
+		reposition_surface(&state, gx, gy, gw, gh);
+	}
 
 	struct pollfd pollfds[3];
 	int npollfds = 2;
@@ -1850,15 +2081,15 @@ int main(int argc, char *argv[]) {
 
 		/* Handle IPC socket connections (pause/resume signaling) */
 		if (npollfds == 3 && (pollfds[2].revents & POLLIN)) {
-			int client_fd = accept(state.sock_fd, nullptr, NULL);
+			int client_fd = accept(state.sock_fd, nullptr, nullptr);
 			if (client_fd >= 0) {
 				char cmd = 0;
 				ssize_t _nr = read(client_fd, &cmd, 1);
 				if (_nr == 1) {
 					if (cmd == 'P') {
-					clear_full_keylink(state.keys, &state);
-					reset_input_state(&state);
-					state.paused = true;
+						clear_full_keylink(state.keys, &state);
+						reset_input_state(&state);
+						state.paused = true;
 						if (surface_is_configured(&state) && state.surface) {
 							render_frame(&state);
 						}
@@ -1923,6 +2154,22 @@ int main(int argc, char *argv[]) {
 					} else if (cmd == 'K') {
 						config_free();
 						config_load();
+					} else if (cmd == 'M') {
+						char argbuf[256] = {0};
+						size_t argpos = 0;
+						while (argpos < sizeof(argbuf) - 1) {
+							ssize_t nr = read(client_fd, &argbuf[argpos], 1);
+							if (nr <= 0)
+								break;
+							if (argbuf[argpos] == '\0')
+								break;
+							argpos++;
+						}
+						int32_t gx = 0, gy = 0;
+						if (sscanf(argbuf, "%d,%d", &gx, &gy) >= 2) {
+							reposition_surface(&state, gx, gy, 0, 0);
+							set_dirty(&state);
+						}
 					}
 				}
 				close(client_fd);

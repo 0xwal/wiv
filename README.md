@@ -50,10 +50,11 @@ After that, run `./build/wiv` directly — no root or setuid required.
 ## Usage
 
 ```
-wiv [-b|-f|-s #RRGGBB[AA]] [-F font] [-t timeout]
-    [-a top|left|right|bottom] [-m margin] [-l lenmax]
+wiv [-b|-f|-s|-r #RRGGBB[AA]] [-F font] [-t timeout]
+    [-a top|left|right|bottom|center] [-m margin] [-l lenmax]
     [-o output] [-w [pixels]] [-i] [-H height] [-D trace] [-P] [-R]
-    [-O opacity] [-c] [-p[colors]]
+    [-O [opacity]] [-c] [-K] [-p[colors]]
+    [-g X,Y[,WxH]] [-T left|center|right]
 ```
 
 - *-b #RRGGBB[AA]*: set background color
@@ -62,8 +63,9 @@ wiv [-b|-f|-s #RRGGBB[AA]] [-F font] [-t timeout]
 - *-r #RRGGBB[AA]*: set color for repeat count symbols
 - *-F font*: set font (Pango format, e.g. 'monospace bold 24')
 - *-t timeout*: set timeout before clearing old keystrokes(ms)
-- *-a top|left|right|bottom*: anchor the keystrokes to an edge. May be specified
-  twice.
+- *-a top|left|right|bottom|center*: anchor the keystrokes to an edge. May be
+  specified twice (e.g. `-a top -a left`). `center` can be combined with an
+  edge anchor (e.g. `-a top -a center` to center horizontally at the top).
 - *-m margin*: set a margin (in pixels) from the nearest edge
 - *-l lenmax*: set the key layer lenmax
 - *-w [pixels]*: use a fixed overlay width instead of resizing per keystroke.
@@ -89,6 +91,15 @@ wiv [-b|-f|-s #RRGGBB[AA]] [-F font] [-t timeout]
   With a value, overrides the pool with a comma-separated list of hex colors
   (e.g. `-p"#ff0000,#00ff00,#0000ffAA"`). Keys without a per-key color use pool
   colors in display order, wrapping when the pool is exhausted.
+- *-g X,Y[,WxH]*: position overlay at absolute coordinates (slurp-compatible).
+  Accepts `X,Y` or `X,Y,WxH` (where `x` or `X` separates width from height).
+  Spaces are normalized to commas, so slurp output (`X,Y WxH`) works directly.
+  When combined with `-a center`, the coordinates become the center point
+  instead of the top-left corner.
+  When `-g` is used, `-m` (margin) and `-o` (output) are ignored with a warning.
+- *-T left|center|right*: set text alignment within a fixed-width overlay (`-w`).
+  Independent of the anchor — controls horizontal text position inside the box.
+  Default is `left`.
 
 **Environment:**
 - *WIV_MASK*: comma-separated key sequence patterns to suppress/sensitive
@@ -126,9 +137,43 @@ Colors are assigned by display position — key #0 gets pool[0], key #1 gets
 pool[1], wrapping around. At runtime, `-p"#RRGGBBAA,#RRGGBB"` overrides the
 compile-time pool without rebuilding.
 
+**IPC Move:**
+A second instance can reposition a running overlay using `-g`. When wiv
+detects an already-running instance, it sends the coordinates over IPC and
+exits immediately:
+
+```bash
+# initial launch
+wiv -g 500,800,300x100
+
+# reposition later (slurp output works directly)
+wiv -g $(slurp -p)
+```
+
+The move command accepts `X,Y` coordinates. When the overlay has a fixed
+size (`-g X,Y,WxH`), only the position is sent via IPC.
+
+**Behavior Notes:**
+- `-g` overrides both `-m` (margin) and `-o` (output). wiv prints a warning
+  when either is combined with `-g`.
+- `-a center` and `-g` compose: when both are set, the coordinates specify
+  the center of the overlay rather than the top-left corner.
+- Use `slurp -p` for point mode — the output (`X,Y`) maps directly to
+  `-g` coordinates.
+
 example:
 ```bash
+# basic usage — anchored bottom-right with margin
 wiv -a bottom -F 'Sans Bold 30' -s '#B5B520ff' -f  '#ecd29cff' -b '#201B1488' -l 60 -w
+
+# fixed-width with centered text
+wiv -w 400 -T center -a bottom -F 'Sans Bold 24'
+
+# position at absolute coordinates via slurp
+wiv -g $(slurp -p)
+
+# centered at top with fixed size
+wiv -a top -a center -g 960,20,300x60 -T center -F 'Sans Bold 20'
 ```
 
 ## Keymap Configuration
