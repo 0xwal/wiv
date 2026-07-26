@@ -770,6 +770,7 @@ static void del_last_key(struct wsk_state *state, int n) {
 			if ((*temp_keypress) == nullptr) {
 				free(*link);
 				*link = nullptr;
+				break;
 			} else {
 				link = temp_keypress;
 			}
@@ -781,12 +782,22 @@ static void del_last_key(struct wsk_state *state, int n) {
 static void strip_repeat_nodes(struct wsk_state *state) {
 	struct wsk_keypress **link = &state->keys;
 	while (*link) {
-		if ((*link)->is_repeat) {
-			struct wsk_keypress *to_free = *link;
-			*link = to_free->next;
+		link = &(*link)->next;
+	}
+	// link now points to the nullptr at the end — walk back and strip trailing repeat nodes
+	struct wsk_keypress **tail = link;
+	while (tail != &state->keys) {
+		// Find the node just before tail
+		struct wsk_keypress **prev = &state->keys;
+		while (*prev && &(*prev)->next != tail)
+			prev = &(*prev)->next;
+		if ((*prev)->is_repeat) {
+			struct wsk_keypress *to_free = *prev;
+			*prev = to_free->next;
 			free(to_free);
+			tail = prev;
 		} else {
-			link = &(*link)->next;
+			break;
 		}
 	}
 }
@@ -1386,7 +1397,7 @@ int main(int argc, char *argv[]) {
 				}
 				break;
 			case 'x':
-				state.repeat_threshold = atoi(optarg);
+				state.repeat_threshold = (int) strtol(optarg, NULL, 10);
 				break;
 			case 'd':
 				state.backspace_delete = true;
