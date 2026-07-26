@@ -1,48 +1,49 @@
 #ifndef KEYMAP_H
 #define KEYMAP_H
 
-#define KEY_PAD_BEFORE ""
-#define KEY_PAD_AFTER ""
+#include <stdint.h>
 
-#define REPEAT_MARKER "⋅"
-#define REPEAT_0 "0"
-#define REPEAT_1 "1"
-#define REPEAT_2 "2"
-#define REPEAT_3 "3"
-#define REPEAT_4 "4"
-#define REPEAT_5 "5"
-#define REPEAT_6 "6"
-#define REPEAT_7 "7"
-#define REPEAT_8 "8"
-#define REPEAT_9 "9"
+constexpr const char KEY_PAD_BEFORE[] = "";
+constexpr const char KEY_PAD_AFTER[] = "";
 
-#define COLOR_BACKGROUND 0x00000000
-#define COLOR_SPECIAL_FG 0xebdbb240
-#define COLOR_FOREGROUND 0xebdbb2f0
-#define COLOR_REPEAT_FG 0xebdbb220
+constexpr const char REPEAT_MARKER[] = "⋅";
+constexpr const char REPEAT_0[] = "0";
+constexpr const char REPEAT_1[] = "1";
+constexpr const char REPEAT_2[] = "2";
+constexpr const char REPEAT_3[] = "3";
+constexpr const char REPEAT_4[] = "4";
+constexpr const char REPEAT_5[] = "5";
+constexpr const char REPEAT_6[] = "6";
+constexpr const char REPEAT_7[] = "7";
+constexpr const char REPEAT_8[] = "8";
+constexpr const char REPEAT_9[] = "9";
 
-#define DEFAULT_FONT "Sans Bold 40"
-#define DISPLAY_MIN_HEIGHT 100
-#define DEFAULT_OVERLAY_OPACITY 1.0f
-#define DEFAULT_TIMEOUT 500
-#define DEFAULT_LEGNTH_LIMIT 20
-#define REPEAT_FONT_SCALE 0.5
-#define REPEAT_DELAY 250  /* ms before first repeat */
-#define REPEAT_RATE 40    /* ms between repeats (25Hz) */
-#define TEXT_ALIGN_CENTER
+constexpr uint32_t COLOR_BACKGROUND = 0x00000000;
+constexpr uint32_t COLOR_SPECIAL_FG  = 0xebdbb240;
+constexpr uint32_t COLOR_FOREGROUND  = 0xebdbb2f0;
+constexpr uint32_t COLOR_REPEAT_FG   = 0xebdbb220;
+
+constexpr const char DEFAULT_FONT[] = "Sans Bold 40";
+constexpr int32_t DISPLAY_MIN_HEIGHT = 100;
+constexpr float DEFAULT_OVERLAY_OPACITY = 1.0f;
+constexpr int32_t DEFAULT_TIMEOUT = 500;
+constexpr int32_t DEFAULT_LEGNTH_LIMIT = 20; 
+constexpr double REPEAT_FONT_SCALE = 0.5;
+constexpr int32_t REPEAT_DELAY = 250;  /* ms */
+constexpr int32_t REPEAT_RATE = 40;    /* ms */
 
 typedef struct {
-	const char *name; /* xkb keysym name, e.g. "Return", "a", "Control_L" */
-	const char *display; /* UTF-8 display text, e.g. "⏎ ", "🅰️", " Ctrl+" */
-	const char *fg; /* text color "#RRGGBB" or "#RRGGBBAA", NULL → global fg */
+	const char *name;
+	const char *display;
+	const char *fg;
 } KeymapEntry;
 
 /* Variadic macro: 2 args → no color override, 3 args → with color */
 #define K(...) K_GET_MACRO(__VA_ARGS__, K3, K2)(__VA_ARGS__)
 #define K_GET_MACRO(_1, _2, _3, NAME, ...) NAME
-#define K2(n, d) {n, d, NULL}
+#define K2(n, d) {n, d, nullptr}
 #define K3(n, d, f) {n, d, f}
-#define KC(name, fg) {name, NULL, fg}
+#define KC(name, fg) {name, nullptr, fg}
 
 // clang-format off
 static const KeymapEntry keymap[] = {
