@@ -30,11 +30,11 @@ static const size_t COLOR_POOL_COUNT = sizeof(COLOR_POOL) / sizeof(COLOR_POOL[0]
 #define MAX_POOL_COLORS 32
 #define DEFAULT_MARGIN 32
 
-#define IPC_CMD_PAUSE   'P'
-#define IPC_CMD_RESUME  'R'
+#define IPC_CMD_PAUSE 'P'
+#define IPC_CMD_RESUME 'R'
 #define IPC_CMD_OPACITY 'O'
-#define IPC_CMD_RELOAD  'K'
-#define IPC_CMD_MOVE    'M'
+#define IPC_CMD_RELOAD 'K'
+#define IPC_CMD_MOVE 'M'
 
 static bool pool_enabled = false;
 static const char *runtime_pool[MAX_POOL_COLORS];
@@ -289,6 +289,17 @@ static const KeymapEntry *keymap_entry(const char *name) {
 	return nullptr;
 }
 
+static const char *keypress_display(struct wsk_state *state, struct wsk_keypress *key) {
+	if (state->inspect)
+		return key->name;
+	const KeymapEntry *entry = keymap_entry(key->name);
+	if (entry && entry->display)
+		return entry->display;
+	if (key->utf8[0])
+		return key->utf8;
+	return key->name;
+}
+
 //show key in keylink(begin at state->keys)
 static void render_to_cairo(cairo_t *cairo, struct wsk_state *state, int scale, uint32_t *width, uint32_t *height) {
 	cairo_set_operator(cairo, CAIRO_OPERATOR_SOURCE);
@@ -308,12 +319,11 @@ static void render_to_cairo(cairo_t *cairo, struct wsk_state *state, int scale, 
 	const char *prev_display = nullptr;
 	size_t position = 0;
 	while (key) {
-		const KeymapEntry *entry = keymap_entry(key->name);
-		const char *display;
+		const char *display = keypress_display(state, key);
 		uint32_t color;
 
+		const KeymapEntry *entry = keymap_entry(key->name);
 		if (state->inspect) {
-			display = key->name;
 			color = state->specialfg;
 		} else if (entry) {
 			if (entry->fg && !POOL_OVERRIDES_FG) {
@@ -322,12 +332,9 @@ static void render_to_cairo(cairo_t *cairo, struct wsk_state *state, int scale, 
 				color = get_pool_color(position,
 						       entry->fg ? parse_color(entry->fg) : state->foreground);
 			}
-			display = entry->display ? entry->display : (key->utf8[0] ? key->utf8 : key->name);
 		} else if (key->utf8[0]) {
-			display = key->utf8;
 			color = get_pool_color(position, state->foreground);
 		} else {
-			display = key->name;
 			color = get_pool_color(position, state->foreground);
 		}
 
@@ -442,12 +449,16 @@ static void render_frame(struct wsk_state *state) {
 		render_frame_dynamic(state, scale, width, height);
 }
 
+static void clear_buffer_if_configured(struct wsk_state *state, int scale) {
+	if (state->width && state->height)
+		commit_buffer(state, scale, state->width, state->height, false, 0);
+	state->resize_pending = false;
+}
+
 static void render_frame_dynamic(struct wsk_state *state, int scale, uint32_t width, uint32_t height) {
 	if (height / scale != state->height || width / scale != state->width || state->width == 0) {
 		if (width == 0 || height == 0) {
-			if (state->width && state->height)
-				commit_buffer(state, scale, state->width, state->height, false, 0);
-			state->resize_pending = false;
+			clear_buffer_if_configured(state, scale);
 		} else {
 			if (!state->resize_pending) {
 				state->resize_pending = true;
@@ -463,9 +474,7 @@ static void render_frame_dynamic(struct wsk_state *state, int scale, uint32_t wi
 
 static void render_frame_fixed(struct wsk_state *state, int scale, uint32_t width, uint32_t height) {
 	if (height == 0) {
-		if (state->width && state->height)
-			commit_buffer(state, scale, state->width, state->height, false, 0);
-		state->resize_pending = false;
+		clear_buffer_if_configured(state, scale);
 		return;
 	}
 	uint32_t target_h = height / scale;
@@ -507,17 +516,7 @@ static void debug_print_display(struct wsk_state *state) {
 	}
 	int count = 0;
 	while (key) {
-		const char *display;
-		const KeymapEntry *entry = keymap_entry(key->name);
-		if (state->inspect) {
-			display = key->name;
-		} else if (entry && entry->display) {
-			display = entry->display;
-		} else if (key->utf8[0]) {
-			display = key->utf8;
-		} else {
-			display = key->name;
-		}
+		const char *display = keypress_display(state, key);
 		if (key->is_repeat) {
 			fprintf(trace_file, "‹%s›", display);
 		} else {
@@ -769,28 +768,15 @@ static const struct wl_registry_listener registry_listener = {
 	.global_remove = registry_global_remove,
 };
 
-static int calculate_del_charnum_of_int(int num) {
-	int count = 0;
-
-	if (num == 1) {
+static int calculate_charnum_of_int(int num, bool is_del) {
+	if (is_del && num == 1)
 		return 0;
-	}
-
-	while (num != 0) {
-		num /= 10;
-		++count;
-	}
-	return count + 1;
-}
-
-static int calculate_add_charnum_of_int(int num) {
 	int count = 0;
-
 	while (num != 0) {
 		num /= 10;
 		++count;
 	}
-	return count;
+	return count + (is_del ? 1 : 0);
 }
 
 
@@ -874,12 +860,12 @@ static void attach_repeat_flag(struct wsk_state *state, int num, int num_len) {
 
 /* Generate a synthetic repeat for a held key */
 static void generate_held_key_repeat(struct wsk_state *state) {
-	int del_charnum = calculate_del_charnum_of_int(state->combination_key_repetition);
+	int del_charnum = calculate_charnum_of_int(state->combination_key_repetition, true);
 	if (state->combination_key_repetition > state->repeat_threshold - 1)
 		del_last_key(state, del_charnum);
 	state->combination_key_repetition++;
 	if (state->combination_key_repetition > state->repeat_threshold - 1) {
-		int add_charnum = calculate_add_charnum_of_int(state->combination_key_repetition);
+		int add_charnum = calculate_charnum_of_int(state->combination_key_repetition, false);
 		attach_repeat_flag(state, state->combination_key_repetition, add_charnum);
 	}
 	set_dirty(state);
@@ -954,6 +940,20 @@ static void mask_buffer_add(struct mask_state *m, struct wsk_keypress *kp) {
 	if (m->buffer_len >= MASK_BUFFER_MAX)
 		return;
 	m->buffer[m->buffer_len++] = kp;
+}
+
+static void mask_handle_backspace(struct mask_state *m) {
+	if (m->buffer_len <= 0)
+		return;
+	free(m->buffer[m->buffer_len - 1]);
+	m->buffer_len--;
+	for (int p = 0; p < m->num_patterns; p++) {
+		if (m->active[p] && m->pos[p] > 0) {
+			m->pos[p]--;
+			if (m->matched[p] > 0)
+				m->matched[p]--;
+		}
+	}
 }
 
 static int append_key_with_modifiers(struct wsk_state *state, struct wsk_keypress *kp) {
@@ -1075,16 +1075,7 @@ static void handle_libinput_event(struct wsk_state *state, struct libinput_event
 
 				// Backspace while pattern buffer active — pop last
 				if (state->mask.buffer_len > 0 && strcmp(keypress->name, "BackSpace") == 0) {
-					struct wsk_keypress *last = state->mask.buffer[state->mask.buffer_len - 1];
-					free(last);
-					state->mask.buffer_len--;
-					for (int p = 0; p < state->mask.num_patterns; p++) {
-						if (state->mask.active[p] && state->mask.pos[p] > 0) {
-							state->mask.pos[p]--;
-							if (state->mask.matched[p] > 0)
-								state->mask.matched[p]--;
-						}
-					}
+					mask_handle_backspace(&state->mask);
 					free(keypress);
 					state->last_was_release = (key_state == LIBINPUT_KEY_STATE_RELEASED);
 					clock_gettime(CLOCK_MONOTONIC, &state->last_key);
@@ -1153,7 +1144,6 @@ static void handle_libinput_event(struct wsk_state *state, struct libinput_event
 					link = &(*link)->next;
 				}
 
-				int special_key_num = 0;
 				memset(state->current_combination_key, 0, sizeof(state->current_combination_key));
 
 				char *combo = state->current_combination_key;
@@ -1184,34 +1174,19 @@ static void handle_libinput_event(struct wsk_state *state, struct libinput_event
 						// 3rd+ press: counter shows, don't add key node
 						free(keypress);
 						if (state->combination_key_repetition > state->repeat_threshold - 1)
-							del_last_key(state, calculate_del_charnum_of_int(
-										    state->combination_key_repetition));
+							del_last_key(state,
+								     calculate_charnum_of_int(
+									     state->combination_key_repetition, true));
 					}
 					state->combination_key_repetition++;
 					if (state->combination_key_repetition > state->repeat_threshold - 1) {
-						int add_charnum =
-							calculate_add_charnum_of_int(state->combination_key_repetition);
+						int add_charnum = calculate_charnum_of_int(
+							state->combination_key_repetition, false);
 						attach_repeat_flag(state, state->combination_key_repetition,
 								   add_charnum);
 					}
 				} else {
-					// === FIRST PRESS PATH: add modifier nodes + main key ===
-					last_hold = nullptr;
-					for (int i = 0; i < 10; i++) {
-						int *hp = modifier_hold_ptr(state, i);
-						if (*hp && hp != last_hold) {
-							struct wsk_keypress *temp_keypress =
-								safe_calloc(1, sizeof(struct wsk_keypress));
-							strcpy(temp_keypress->name, modifier_display_name(i));
-							special_key_num++;
-							*link = temp_keypress;
-							link = &(*link)->next;
-							last_hold = hp;
-						}
-					}
-
-					*link = keypress;
-					special_key_num++;
+					append_key_with_modifiers(state, keypress);
 
 					snprintf(state->prev_combination_key, sizeof(state->prev_combination_key), "%s",
 						 state->current_combination_key);
@@ -1302,9 +1277,9 @@ static const char *get_sock_path(char *buf, size_t bufsize) {
 	return buf;
 }
 
-static void compute_g_margins(uint32_t anchor, bool has_center, int32_t local_x, int32_t local_y, int32_t output_w, int32_t output_h,
-			      int32_t surf_w, int32_t surf_h, int32_t *m_top, int32_t *m_right, int32_t *m_bottom,
-			      int32_t *m_left) {
+static void compute_g_margins(uint32_t anchor, bool has_center, int32_t local_x, int32_t local_y, int32_t output_w,
+			      int32_t output_h, int32_t surf_w, int32_t surf_h, int32_t *m_top, int32_t *m_right,
+			      int32_t *m_bottom, int32_t *m_left) {
 	*m_top = 0;
 	*m_right = 0;
 	*m_bottom = 0;
@@ -1395,8 +1370,8 @@ static void reposition_surface(struct wsk_state *state, int32_t global_x, int32_
 		compute_anchor |= ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT;
 		compute_anchor &= ~ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
 	}
-	compute_g_margins(compute_anchor, state->has_center, local_x, local_y, target->logical_w, target->logical_h, eff_w, eff_h, &m_top,
-			  &m_right, &m_bottom, &m_left);
+	compute_g_margins(compute_anchor, state->has_center, local_x, local_y, target->logical_w, target->logical_h,
+			  eff_w, eff_h, &m_top, &m_right, &m_bottom, &m_left);
 	zwlr_layer_surface_v1_set_anchor(state->layer_surface, compute_anchor);
 	zwlr_layer_surface_v1_set_margin(state->layer_surface, m_top, m_right, m_bottom, m_left);
 	zwlr_layer_surface_v1_set_exclusive_zone(state->layer_surface, -1);
@@ -1428,130 +1403,147 @@ static void parse_position_arg(const char *arg, int32_t *x, int32_t *y, int32_t 
 	sscanf(tmp, "%d,%d,%d,%d", x, y, w, h);
 }
 
-int main(int argc, char *argv[]) {
-	struct wsk_state state = {0};
-	if (devmgr_start(&state.devmgr, &state.devmgr_pid, INPUTDEVPATH) > 0) {
-		return 1;
+static size_t read_ipc_string(int fd, char *buf, size_t bufsize) {
+	size_t pos = 0;
+	while (pos < bufsize - 1) {
+		ssize_t nr = read(fd, &buf[pos], 1);
+		if (nr <= 0)
+			break;
+		if (buf[pos] == '\0')
+			break;
+		pos++;
 	}
+	buf[pos] = '\0';
+	return pos;
+}
 
-	int ret = 0;
+static void apply_opacity_and_reply(struct wsk_state *state, int client_fd, float new_opacity) {
+	state->opacity = new_opacity;
+	if (state->opacity > 1.0f)
+		state->opacity = 1.0f;
+	if (state->opacity < 0.01f)
+		state->opacity = 0.01f;
+	char resp[32];
+	int len = snprintf(resp, sizeof(resp), "%g", state->opacity);
+	write(client_fd, resp, (size_t) len);
+	if (surface_is_configured(state) && state->surface)
+		render_frame(state);
+}
 
-	bool want_pause = false;
-	bool want_resume = false;
-	bool want_reload = false;
-	bool want_opacity_query = false;
+static void init_state_defaults(struct wsk_state *state) {
+	state->margin = DEFAULT_MARGIN;
+	state->background = COLOR_BACKGROUND;
+	state->specialfg = COLOR_SPECIAL_FG;
+	state->repeatfg = COLOR_REPEAT_FG;
+	state->foreground = COLOR_FOREGROUND;
+	state->font = DEFAULT_FONT;
+	state->timeout = DEFAULT_TIMEOUT;
+	state->length_limit = DEFAULT_LENGTH_LIMIT;
+	state->fixed_width = 0;
+	reset_input_state(state);
+	state->last_repeat_time.tv_sec = 0;
+	state->last_repeat_time.tv_nsec = 0;
+	state->repeat_threshold = REPEAT_THRESHOLD_DEFAULT;
+	state->min_height = DISPLAY_MIN_HEIGHT;
+	state->mask = (struct mask_state) {0};
+	state->inspect = false;
+	state->resize_pending = false;
+	state->sock_fd = -1;
+	state->paused = false;
+	state->opacity = DEFAULT_OVERLAY_OPACITY;
+	state->text_align = TEXT_ALIGN_LEFT;
+	state->sock_path[0] = '\0';
+}
+
+static bool parse_options(struct wsk_state *state, int argc, char *argv[], bool *want_pause, bool *want_resume,
+			  bool *want_reload, bool *want_opacity_query, const char **opacity_arg) {
 	bool validate_config = false;
-	const char *opacity_arg = nullptr;
-
-	state.margin = DEFAULT_MARGIN;
-	state.background = COLOR_BACKGROUND;
-	state.specialfg = COLOR_SPECIAL_FG;
-	state.repeatfg = COLOR_REPEAT_FG;
-	state.foreground = COLOR_FOREGROUND;
-	state.font = DEFAULT_FONT;
-	state.timeout = DEFAULT_TIMEOUT;
-	state.length_limit = DEFAULT_LENGTH_LIMIT;
-	state.fixed_width = 0;
-	reset_input_state(&state);
-	state.last_repeat_time.tv_sec = 0;
-	state.last_repeat_time.tv_nsec = 0;
-	state.repeat_threshold = REPEAT_THRESHOLD_DEFAULT;
-	state.min_height = DISPLAY_MIN_HEIGHT;
-	state.mask = (struct mask_state) {0};
-	state.inspect = false;
-	state.resize_pending = false;
-	state.sock_fd = -1;
-	state.paused = false;
-	state.opacity = DEFAULT_OVERLAY_OPACITY;
-	state.text_align = TEXT_ALIGN_LEFT;
-	state.sock_path[0] = '\0';
-
 	int c;
 	opterr = 0;
 	while ((c = getopt(argc, argv, "hib:cf:s:r:F:t:a:m:o:l:w:p::D:H:PRKO::dx:g:T:")) != -1) {
 		switch (c) {
 			case 'l':
-				state.length_limit = (int) strtol(optarg, nullptr, 10);
+				state->length_limit = (int) strtol(optarg, nullptr, 10);
 				break;
 			case 'w':
-				state.fixed_width = (int) strtol(optarg, nullptr, 10);
+				state->fixed_width = (int) strtol(optarg, nullptr, 10);
 				break;
 			case 'b':
-				state.background = parse_color(optarg);
+				state->background = parse_color(optarg);
 				break;
 			case 'f':
-				state.foreground = parse_color(optarg);
+				state->foreground = parse_color(optarg);
 				break;
 			case 's':
-				state.specialfg = parse_color(optarg);
+				state->specialfg = parse_color(optarg);
 				break;
 			case 'r':
-				state.repeatfg = parse_color(optarg);
+				state->repeatfg = parse_color(optarg);
 				break;
 			case 'F':
-				state.font = optarg;
+				state->font = optarg;
 				break;
 			case 't':
-				state.timeout = (int) strtol(optarg, nullptr, 10);
+				state->timeout = (int) strtol(optarg, nullptr, 10);
 				break;
 			case 'a':
-				if (!state.has_explicit_anchor)
-					state.anchor = 0;
-				state.has_explicit_anchor = true;
+				if (!state->has_explicit_anchor)
+					state->anchor = 0;
+				state->has_explicit_anchor = true;
 				if (strcmp(optarg, "top") == 0) {
-					state.anchor |= ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP;
+					state->anchor |= ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP;
 				} else if (strcmp(optarg, "left") == 0) {
-					state.anchor |= ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT;
+					state->anchor |= ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT;
 				} else if (strcmp(optarg, "right") == 0) {
-					state.anchor |= ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
+					state->anchor |= ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
 				} else if (strcmp(optarg, "bottom") == 0) {
-					state.anchor |= ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM;
+					state->anchor |= ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM;
 				} else if (strcmp(optarg, "center") == 0) {
-					state.has_center = true;
+					state->has_center = true;
 				}
 				break;
 			case 'm':
-				state.margin = (int) strtol(optarg, nullptr, 10);
-				state.has_explicit_margin = true;
+				state->margin = (int) strtol(optarg, nullptr, 10);
+				state->has_explicit_margin = true;
 				break;
 			case 'i':
-				state.inspect = true;
+				state->inspect = true;
 				break;
 			case 'o':
-				state.output_mode = OUTPUT_PINNED;
-				state.has_explicit_output = true;
-				strncpy(state.target_output_name, optarg, sizeof(state.target_output_name) - 1);
+				state->output_mode = OUTPUT_PINNED;
+				state->has_explicit_output = true;
+				strncpy(state->target_output_name, optarg, sizeof(state->target_output_name) - 1);
 				break;
 #ifdef WSK_DEBUG
 			case 'D':
 				trace_file = fopen(optarg, "w");
 				if (!trace_file) {
 					fprintf(stderr, "Failed to open trace file: %s\n", optarg);
-					return 1;
+					exit(1);
 				}
 				WSK_TRACE("trace started pid=%d", getpid());
 				break;
 #endif
 			case 'H':
-				state.min_height = (uint32_t) strtol(optarg, nullptr, 10);
+				state->min_height = (uint32_t) strtol(optarg, nullptr, 10);
 				break;
 			case 'P':
-				state.paused = true;
-				want_pause = true;
+				state->paused = true;
+				*want_pause = true;
 				break;
 			case 'R':
-				state.paused = false;
-				want_resume = true;
+				state->paused = false;
+				*want_resume = true;
 				break;
 			case 'O':
-				want_opacity_query = (optarg == nullptr);
-				opacity_arg = optarg;
+				*want_opacity_query = (optarg == nullptr);
+				*opacity_arg = optarg;
 				break;
 			case 'c':
 				validate_config = true;
 				break;
 			case 'K':
-				want_reload = true;
+				*want_reload = true;
 				break;
 			case 'p':
 				pool_enabled = true;
@@ -1570,364 +1562,352 @@ int main(int argc, char *argv[]) {
 				}
 				break;
 			case 'x':
-				state.repeat_threshold = (int) strtol(optarg, nullptr, 10);
+				state->repeat_threshold = (int) strtol(optarg, nullptr, 10);
 				break;
 			case 'd':
-				state.backspace_delete = true;
+				state->backspace_delete = true;
 				break;
 			case 'T':
 				if (strcmp(optarg, "left") == 0)
-					state.text_align = TEXT_ALIGN_LEFT;
+					state->text_align = TEXT_ALIGN_LEFT;
 				else if (strcmp(optarg, "center") == 0)
-					state.text_align = TEXT_ALIGN_CENTER;
+					state->text_align = TEXT_ALIGN_CENTER;
 				else if (strcmp(optarg, "right") == 0)
-					state.text_align = TEXT_ALIGN_RIGHT;
+					state->text_align = TEXT_ALIGN_RIGHT;
 				else
-					fprintf(stderr, "wiv: unknown text alignment '%s', use left, center, or right\n", optarg);
+					fprintf(stderr,
+						"wiv: unknown text alignment '%s', use left, center, or right\n",
+						optarg);
 				break;
 			case 'g':
-				state.has_target_position = true;
-				strncpy(state.target_position_arg, optarg, sizeof(state.target_position_arg) - 1);
-				state.target_position_arg[sizeof(state.target_position_arg) - 1] = '\0';
-				parse_position_arg(optarg, &state.target_x, &state.target_y, &state.target_w,
-						   &state.target_h);
-				state.target_slurp_w = state.target_w;
+				state->has_target_position = true;
+				strncpy(state->target_position_arg, optarg, sizeof(state->target_position_arg) - 1);
+				state->target_position_arg[sizeof(state->target_position_arg) - 1] = '\0';
+				parse_position_arg(optarg, &state->target_x, &state->target_y, &state->target_w,
+						   &state->target_h);
+				state->target_slurp_w = state->target_w;
 				break;
 			case '?':
 				fprintf(stderr, "usage: wshowkeys [-b|-f|-s|-r #RRGGBB[AA]] [-F font] "
 						"[-t timeout]\n\t[-a top|left|right|bottom|center] [-m margin] "
 						"[-o output] [-l numOfLengthLimit] [-w pixels] [-H padding] [-i] [-P] "
-						"[-c] [-R] [-O [opacity]] [-K] [-p[colors]] [-g X,Y[,WxH]] [-T left|center|right]");
+						"[-c] [-R] [-O [opacity]] [-K] [-p[colors]] [-g X,Y[,WxH]] [-T "
+						"left|center|right]");
 				fprintf(stderr, "\n-c          validate keymap config and exit\n");
 				fprintf(stderr, "-K          reload keymap config\n");
 				fprintf(stderr, "-g X,Y[,WxH]  position overlay at absolute coordinates\n");
-				return 1;
+				exit(1);
 		}
 	}
 
-	if (!state.has_explicit_anchor) {
-		state.anchor = ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
+	if (!state->has_explicit_anchor) {
+		state->anchor = ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
 	} else {
 		bool has_vertical =
-			(state.anchor & (ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM)) != 0;
-		bool has_horizontal =
-			(state.anchor & (ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT)) != 0 || state.has_center;
+			(state->anchor & (ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM)) != 0;
+		bool has_horizontal = (state->anchor &
+				       (ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT)) != 0 ||
+				      state->has_center;
 		if (!has_vertical)
-			state.anchor |= ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM;
+			state->anchor |= ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM;
 		if (!has_horizontal)
-			state.anchor |= ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
+			state->anchor |= ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
 	}
 
-	if (state.has_target_position) {
-		if (state.has_explicit_margin)
+	if (state->has_target_position) {
+		if (state->has_explicit_margin)
 			fprintf(stderr, "wiv: -m ignored when -g is used\n");
-		if (state.has_explicit_output)
+		if (state->has_explicit_output)
 			fprintf(stderr, "wiv: -o ignored when -g is used\n");
-		if (state.fixed_width == 0 && state.target_slurp_w > 1)
-			state.fixed_width = state.target_slurp_w;
+		if (state->fixed_width == 0 && state->target_slurp_w > 1)
+			state->fixed_width = state->target_slurp_w;
 	}
 
 	if (validate_config) {
-		return config_validate() == 0 ? 0 : 1;
+		exit(config_validate() == 0 ? 0 : 1);
 	}
 
-	if (state.fixed_width != 0 && state.target_slurp_w == 0)
-		state.fixed_width = compute_fixed_width(&state);
+	if (state->fixed_width != 0 && state->target_slurp_w == 0)
+		state->fixed_width = compute_fixed_width(state);
 
-	if (opacity_arg) {
-		float val = strtof(opacity_arg, nullptr);
+	if (*opacity_arg) {
+		float val = strtof(*opacity_arg, nullptr);
 		if (val < 0.01f)
 			val = 0.01f;
 		if (val > 1.0f)
 			val = 1.0f;
-		state.opacity = val;
+		state->opacity = val;
 	}
 
-	/* IPC socket setup for pause/resume */
-	{
-		char path_buf[256];
-		const char *path = get_sock_path(path_buf, sizeof(path_buf));
-		strncpy(state.sock_path, path, sizeof(state.sock_path) - 1);
-		state.sock_path[sizeof(state.sock_path) - 1] = '\0';
+	return true;
+}
 
-		state.sock_fd = socket(AF_UNIX, SOCK_STREAM, 0);
-		if (state.sock_fd < 0) {
+static bool setup_ipc_socket(struct wsk_state *state, bool want_pause, bool want_resume, bool want_reload,
+			     bool want_opacity_query, const char *opacity_arg) {
+	char path_buf[256];
+	const char *path = get_sock_path(path_buf, sizeof(path_buf));
+	strncpy(state->sock_path, path, sizeof(state->sock_path) - 1);
+	state->sock_path[sizeof(state->sock_path) - 1] = '\0';
+
+	state->sock_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (state->sock_fd < 0) {
+		fprintf(stderr, "socket: %s\n", strerror(errno));
+		return false;
+	}
+
+	struct sockaddr_un addr = {0};
+	addr.sun_family = AF_UNIX;
+	char buf[256];
+	snprintf(buf, sizeof(buf), "%s", path);
+	memcpy(addr.sun_path, buf, strlen(buf) + 1);
+
+	if (bind(state->sock_fd, (struct sockaddr *) &addr, sizeof(addr)) == 0) {
+		if (listen(state->sock_fd, 5) < 0) {
+			fprintf(stderr, "listen: %s\n", strerror(errno));
+			close(state->sock_fd);
+			state->sock_fd = -1;
+			return false;
+		}
+	} else {
+		/* Bind failed — check if another instance is running */
+		int conn_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+		if (conn_fd < 0) {
 			fprintf(stderr, "socket: %s\n", strerror(errno));
-			ret = 1;
-			goto exit;
+			close(state->sock_fd);
+			state->sock_fd = -1;
+			return false;
 		}
-
-		struct sockaddr_un addr = {0};
-		addr.sun_family = AF_UNIX;
-		char buf[256];
-		snprintf(buf, sizeof(buf), "%s", path);
-		memcpy(addr.sun_path, buf, strlen(buf) + 1);
-
-		if (bind(state.sock_fd, (struct sockaddr *) &addr, sizeof(addr)) == 0) {
-			if (listen(state.sock_fd, 5) < 0) {
-				fprintf(stderr, "listen: %s\n", strerror(errno));
-				close(state.sock_fd);
-				state.sock_fd = -1;
-				ret = 1;
-				goto exit;
-			}
-		} else {
-			/* Bind failed — check if another instance is running */
-			int conn_fd = socket(AF_UNIX, SOCK_STREAM, 0);
-			if (conn_fd < 0) {
-				fprintf(stderr, "socket: %s\n", strerror(errno));
-				close(state.sock_fd);
-				state.sock_fd = -1;
-				ret = 1;
-				goto exit;
-			}
-			if (connect(conn_fd, (struct sockaddr *) &addr, sizeof(addr)) == 0) {
-				if (state.has_target_position) {
-					char cmd = 'M';
-					write(conn_fd, &cmd, 1);
-					char pos_buf[64];
-					snprintf(pos_buf, sizeof(pos_buf), "%d,%d", state.target_x, state.target_y);
-					write(conn_fd, pos_buf, strlen(pos_buf));
-					char term = '\0';
-					write(conn_fd, &term, 1);
-					close(conn_fd);
-					close(state.sock_fd);
-					return 0;
-				}
-				if (want_pause) {
-					char cmd = 'P';
-					write(conn_fd, &cmd, 1);
-					close(conn_fd);
-					close(state.sock_fd);
-					return 0;
-				}
-				if (want_resume) {
-					char cmd = 'R';
-					write(conn_fd, &cmd, 1);
-					close(conn_fd);
-					close(state.sock_fd);
-					return 0;
-				}
-				if (opacity_arg || want_opacity_query) {
-					char cmd = 'O';
-					write(conn_fd, &cmd, 1);
-					if (opacity_arg) {
-						write(conn_fd, opacity_arg, strlen(opacity_arg));
-					}
-					char term = '\0';
-					write(conn_fd, &term, 1);
-					char buf[32] = {0};
-					size_t pos = 0;
-					while (pos < sizeof(buf) - 1) {
-						ssize_t nr = read(conn_fd, &buf[pos], 1);
-						if (nr <= 0)
-							break;
-						if (buf[pos] == '\0')
-							break;
-						pos++;
-					}
-					if (pos > 0) {
-						printf("%s\n", buf);
-					}
-					close(conn_fd);
-					close(state.sock_fd);
-					return 0;
-				}
-				if (want_reload) {
-					char cmd = 'K';
-					write(conn_fd, &cmd, 1);
-					close(conn_fd);
-					close(state.sock_fd);
-					return 0;
-				}
-				fprintf(stderr, "wiv: already running, use one of flags -P -R -O -K -g, -h for help\n");
+		if (connect(conn_fd, (struct sockaddr *) &addr, sizeof(addr)) == 0) {
+			if (state->has_target_position) {
+				char cmd = 'M';
+				write(conn_fd, &cmd, 1);
+				char pos_buf[64];
+				snprintf(pos_buf, sizeof(pos_buf), "%d,%d", state->target_x, state->target_y);
+				write(conn_fd, pos_buf, strlen(pos_buf));
+				char term = '\0';
+				write(conn_fd, &term, 1);
 				close(conn_fd);
-				close(state.sock_fd);
-				state.sock_fd = -1;
-				ret = 1;
-				goto exit;
+				close(state->sock_fd);
+				exit(0);
 			}
+			if (want_pause) {
+				char cmd = 'P';
+				write(conn_fd, &cmd, 1);
+				close(conn_fd);
+				close(state->sock_fd);
+				exit(0);
+			}
+			if (want_resume) {
+				char cmd = 'R';
+				write(conn_fd, &cmd, 1);
+				close(conn_fd);
+				close(state->sock_fd);
+				exit(0);
+			}
+			if (opacity_arg || want_opacity_query) {
+				char cmd = 'O';
+				write(conn_fd, &cmd, 1);
+				if (opacity_arg) {
+					write(conn_fd, opacity_arg, strlen(opacity_arg));
+				}
+				char term = '\0';
+				write(conn_fd, &term, 1);
+				char buf[32] = {0};
+				size_t pos = 0;
+				while (pos < sizeof(buf) - 1) {
+					ssize_t nr = read(conn_fd, &buf[pos], 1);
+					if (nr <= 0)
+						break;
+					if (buf[pos] == '\0')
+						break;
+					pos++;
+				}
+				if (pos > 0) {
+					printf("%s\n", buf);
+				}
+				close(conn_fd);
+				close(state->sock_fd);
+				exit(0);
+			}
+			if (want_reload) {
+				char cmd = 'K';
+				write(conn_fd, &cmd, 1);
+				close(conn_fd);
+				close(state->sock_fd);
+				exit(0);
+			}
+			fprintf(stderr, "wiv: already running, use one of flags -P -R -O -K -g, -h for help\n");
 			close(conn_fd);
-			/* No other instance — stale socket, unlink and retry */
-			unlink(path);
-			if (bind(state.sock_fd, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
-				fprintf(stderr, "bind: %s\n", strerror(errno));
-				close(state.sock_fd);
-				state.sock_fd = -1;
-				ret = 1;
-				goto exit;
-			}
-			if (listen(state.sock_fd, 5) < 0) {
-				fprintf(stderr, "listen: %s\n", strerror(errno));
-				close(state.sock_fd);
-				state.sock_fd = -1;
-				ret = 1;
-				goto exit;
-			}
+			close(state->sock_fd);
+			state->sock_fd = -1;
+			return false;
+		}
+		close(conn_fd);
+		/* No other instance — stale socket, unlink and retry */
+		unlink(path);
+		if (bind(state->sock_fd, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
+			fprintf(stderr, "bind: %s\n", strerror(errno));
+			close(state->sock_fd);
+			state->sock_fd = -1;
+			return false;
+		}
+		if (listen(state->sock_fd, 5) < 0) {
+			fprintf(stderr, "listen: %s\n", strerror(errno));
+			close(state->sock_fd);
+			state->sock_fd = -1;
+			return false;
 		}
 	}
+	return true;
+}
 
-	config_load();
-
-	state.repeat_font = scale_font_size(state.font, REPEAT_FONT_SCALE);
-
-	const char *mask_env = getenv("WIV_MASK");
-	if (mask_env) {
-		char *env_copy = strdup(mask_env);
-		if (env_copy) {
-			char *tok = strtok(env_copy, ",");
-			while (tok && state.mask.num_patterns < MASK_PATTERNS_MAX) {
-				strncpy(state.mask.patterns[state.mask.num_patterns], tok, 255);
-				state.mask.patterns[state.mask.num_patterns][255] = '\0';
-				state.mask.num_patterns++;
-				tok = strtok(nullptr, ",");
-			}
-			free(env_copy);
-		}
-	}
-
-	state.udev = udev_new();
-	if (!state.udev) {
+static bool setup_libinput(struct wsk_state *state) {
+	state->udev = udev_new();
+	if (!state->udev) {
 		fprintf(stderr, "udev_create: %s\n", strerror(errno));
-		ret = 1;
-		goto exit;
+		return false;
 	}
 
-	state.libinput = libinput_udev_create_context(&libinput_impl, &state.devmgr, state.udev);
-	udev_unref(state.udev);
-	if (!state.libinput) {
+	state->libinput = libinput_udev_create_context(&libinput_impl, &state->devmgr, state->udev);
+	udev_unref(state->udev);
+	if (!state->libinput) {
 		fprintf(stderr, "libinput_udev_create_context: %s\n", strerror(errno));
-		ret = 1;
-		goto exit;
+		return false;
 	}
+	return true;
+}
 
-	state.xkb_context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
-	if (!state.xkb_context) {
+static bool setup_wayland(struct wsk_state *state) {
+	state->xkb_context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+	if (!state->xkb_context) {
 		fprintf(stderr, "xkb_context_new: %s\n", strerror(errno));
-		ret = 1;
-		goto exit;
+		return false;
 	}
 
-	state.display = wl_display_connect(nullptr);
-	if (!state.display) {
+	state->display = wl_display_connect(nullptr);
+	if (!state->display) {
 		fprintf(stderr, "wl_display_connect: %s\n", strerror(errno));
-		ret = 1;
-		goto exit;
+		return false;
 	}
 
-	state.registry = wl_display_get_registry(state.display);
-	assert(state.registry);
-	wl_registry_add_listener(state.registry, &registry_listener, &state);
-	wl_display_roundtrip(state.display);
+	state->registry = wl_display_get_registry(state->display);
+	assert(state->registry);
+	wl_registry_add_listener(state->registry, &registry_listener, state);
+	wl_display_roundtrip(state->display);
 
 	struct {
 		const char *name;
 		void *ptr;
 	} need_globals[] = {
-		"wl_compositor", &state.compositor, "wl_shm",	       &state.shm,
-		"wl_seat",	 &state.seat,	    "wlr_layer_shell", &state.layer_shell,
+		"wl_compositor", &state->compositor, "wl_shm",		&state->shm,
+		"wl_seat",	 &state->seat,	     "wlr_layer_shell", &state->layer_shell,
 	};
 	for (size_t i = 0; i < sizeof(need_globals) / sizeof(need_globals[0]); ++i) {
-		if (!need_globals[i].ptr) {
+		if (!*(void **) need_globals[i].ptr) {
 			fprintf(stderr,
 				"Error: required Wayland interface '%s' "
 				"is not present\n",
 				need_globals[i].name);
-			ret = 1;
-			goto exit;
+			return false;
 		}
 	}
 
-	wl_seat_add_listener(state.seat, &wl_seat_listener, &state);
-	wl_display_roundtrip(state.display);
+	wl_seat_add_listener(state->seat, &wl_seat_listener, state);
+	wl_display_roundtrip(state->display);
 
 	// Resolve startup output for PINNED mode
 	struct wl_output *startup_output = nullptr;
-	if (state.output_mode == OUTPUT_PINNED) {
-		struct wsk_output *wsk_out = state.outputs;
+	if (state->output_mode == OUTPUT_PINNED) {
+		struct wsk_output *wsk_out = state->outputs;
 		while (wsk_out) {
-			if (strcmp(wsk_out->name, state.target_output_name) == 0) {
+			if (strcmp(wsk_out->name, state->target_output_name) == 0) {
 				startup_output = wsk_out->output;
 				break;
 			}
 			wsk_out = wsk_out->next;
 		}
 		if (!startup_output) {
-			fprintf(stderr, "output '%s' not found, using default\n", state.target_output_name);
-			state.output_mode = OUTPUT_DEFAULT;
+			fprintf(stderr, "output '%s' not found, using default\n", state->target_output_name);
+			state->output_mode = OUTPUT_DEFAULT;
 		}
 	}
 
-	state.surface = wl_compositor_create_surface(state.compositor);
-	assert(state.surface);
-	wl_surface_add_listener(state.surface, &wl_surface_listener, &state);
+	state->surface = wl_compositor_create_surface(state->compositor);
+	assert(state->surface);
+	wl_surface_add_listener(state->surface, &wl_surface_listener, state);
 
 	struct wl_output *layer_output = nullptr;
-	if (state.output_mode == OUTPUT_PINNED)
+	if (state->output_mode == OUTPUT_PINNED)
 		layer_output = startup_output;
 
-	state.layer_surface = zwlr_layer_shell_v1_get_layer_surface(state.layer_shell, state.surface, layer_output,
-								    ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, "showkeys");
-	assert(state.layer_surface);
+	state->layer_surface = zwlr_layer_shell_v1_get_layer_surface(state->layer_shell, state->surface, layer_output,
+								     ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, "showkeys");
+	assert(state->layer_surface);
 
 	// 创建空的输入区域
-	struct wl_region *input_region = wl_compositor_create_region(state.compositor);
-	wl_surface_set_input_region(state.surface, input_region);
-	wl_region_destroy(input_region); // 销毁region，因为surface已经复制了一份
+	struct wl_region *input_region = wl_compositor_create_region(state->compositor);
+	wl_surface_set_input_region(state->surface, input_region);
+	wl_region_destroy(input_region);
 
-	zwlr_layer_surface_v1_add_listener(state.layer_surface, &layer_surface_listener, &state);
-	zwlr_layer_surface_v1_set_size(state.layer_surface, 1, 1);
-	zwlr_layer_surface_v1_set_anchor(state.layer_surface, state.anchor);
-	zwlr_layer_surface_v1_set_margin(state.layer_surface, state.margin, state.margin, state.margin, state.margin);
-	zwlr_layer_surface_v1_set_exclusive_zone(state.layer_surface, -1);
-	wl_surface_commit(state.surface);
+	zwlr_layer_surface_v1_add_listener(state->layer_surface, &layer_surface_listener, state);
+	zwlr_layer_surface_v1_set_size(state->layer_surface, 1, 1);
+	zwlr_layer_surface_v1_set_anchor(state->layer_surface, state->anchor);
+	zwlr_layer_surface_v1_set_margin(state->layer_surface, state->margin, state->margin, state->margin,
+					 state->margin);
+	zwlr_layer_surface_v1_set_exclusive_zone(state->layer_surface, -1);
+	wl_surface_commit(state->surface);
 
-	if (state.has_target_position) {
+	if (state->has_target_position) {
 		int32_t gx = 0, gy = 0, gw = 0, gh = 0;
-		parse_position_arg(state.target_position_arg, &gx, &gy, &gw, &gh);
-		if (gw <= 1) gw = 0;
-		if (gh <= 1) gh = 0;
-		if (state.has_center && gw > 0 && gh > 0) {
+		parse_position_arg(state->target_position_arg, &gx, &gy, &gw, &gh);
+		if (gw <= 1)
+			gw = 0;
+		if (gh <= 1)
+			gh = 0;
+		if (state->has_center && gw > 0 && gh > 0) {
 			gx += gw / 2;
 			gy += gh / 2;
 		}
-		reposition_surface(&state, gx, gy, gw, gh);
+		reposition_surface(state, gx, gy, gw, gh);
 	}
+	return true;
+}
 
+static void event_loop(struct wsk_state *state) {
 	struct pollfd pollfds[3];
 	int npollfds = 2;
 	pollfds[0] = (struct pollfd) {
-		.fd = libinput_get_fd(state.libinput),
+		.fd = libinput_get_fd(state->libinput),
 		.events = POLLIN,
 	};
 	pollfds[1] = (struct pollfd) {
-		.fd = wl_display_get_fd(state.display),
+		.fd = wl_display_get_fd(state->display),
 		.events = POLLIN,
 	};
-	if (state.sock_fd >= 0) {
+	if (state->sock_fd >= 0) {
 		pollfds[2] = (struct pollfd) {
-			.fd = state.sock_fd,
+			.fd = state->sock_fd,
 			.events = POLLIN,
 		};
 		npollfds = 3;
 	}
 
-	state.run = true;
-	while (state.run) {
+	state->run = true;
+	while (state->run) {
 		errno = 0;
 		do {
-			if (wl_display_flush(state.display) == -1 && errno != EAGAIN) {
+			if (wl_display_flush(state->display) == -1 && errno != EAGAIN) {
 				fprintf(stderr, "wl_display_flush: %s\n", strerror(errno));
 				break;
 			}
 		} while (errno == EAGAIN);
 
 		int timeout = -1;
-		if (!state.paused) {
-			if (state.keys) {
+		if (!state->paused) {
+			if (state->keys) {
 				timeout = 200;
 			}
-			if (state.key_held && (timeout == -1 || REPEAT_RATE < timeout))
+			if (state->key_held && (timeout == -1 || REPEAT_RATE < timeout))
 				timeout = REPEAT_RATE; /* Wake up often during key hold */
 		}
 
@@ -1952,51 +1932,37 @@ int main(int argc, char *argv[]) {
 			break;
 		}
 
-		if (!state.paused) {
+		if (!state->paused) {
 			/* Clear out old keys */
 			struct timespec now;
-			struct wsk_keypress *key = state.keys;
+			struct wsk_keypress *key = state->keys;
 
 			clock_gettime(CLOCK_MONOTONIC, &now);
-			long elapsed_ns = (now.tv_sec - state.last_key.tv_sec) * 1000000000L +
-					  (now.tv_nsec - state.last_key.tv_nsec);
+			long elapsed_ns = (now.tv_sec - state->last_key.tv_sec) * 1000000000L +
+					  (now.tv_nsec - state->last_key.tv_nsec);
 			WSK_TRACE("timeout check: last_was_release=%d elapsed_ms=%ld timeout=%d keys=%p",
-				  state.last_was_release, elapsed_ns / 1000000, state.timeout, (void *) key);
-			if (state.last_was_release && elapsed_ns > (long) state.timeout * 1000000L) {
-				if (state.keys) {
-					clear_full_keylink(key, &state);
-					for (int i = 0; i < state.mask.buffer_len; i++)
-						free(state.mask.buffer[i]);
-					mask_reset(&state.mask);
+				  state->last_was_release, elapsed_ns / 1000000, state->timeout, (void *) key);
+			if (state->last_was_release && elapsed_ns > (long) state->timeout * 1000000L) {
+				if (state->keys) {
+					clear_full_keylink(key, state);
+					for (int i = 0; i < state->mask.buffer_len; i++)
+						free(state->mask.buffer[i]);
+					mask_reset(&state->mask);
 				}
 			} else {
 				int all_key_len = 0;
 				const char *prev_display = nullptr;
 				while (key) {
-					const char *display;
-					if (state.inspect) {
-						display = key->name;
-					} else {
-						const KeymapEntry *entry = keymap_entry(key->name);
-						if (entry) {
-							display = entry->display
-									  ? entry->display
-									  : (key->utf8[0] ? key->utf8 : key->name);
-						} else if (key->utf8[0]) {
-							display = key->utf8;
-						} else {
-							display = key->name;
-						}
-					}
-					if (state.fixed_width && state.recording_cairo) {
+					const char *display = keypress_display(state, key);
+					if (state->fixed_width && state->recording_cairo) {
 						size_t prev_len = prev_display ? strlen(prev_display) : 0;
 						const char *pad_before =
 							(prev_len > 0 && prev_display[prev_len - 1] == '+')
 								? ""
 								: KEY_PAD_BEFORE;
 						int kw = 0, kh = 0;
-						int cur_scale = state.output ? state.output->scale : 1;
-						get_text_size(state.recording_cairo, state.font, &kw, &kh, nullptr,
+						int cur_scale = state->output ? state->output->scale : 1;
+						get_text_size(state->recording_cairo, state->font, &kw, &kh, nullptr,
 							      cur_scale, "%s%s%s", pad_before, display, KEY_PAD_AFTER);
 						all_key_len += kw;
 					} else {
@@ -2011,59 +1977,59 @@ int main(int argc, char *argv[]) {
 					prev_display = display;
 					key = key->next;
 				}
-				int limit = state.fixed_width
-						    ? state.fixed_width * (state.output ? state.output->scale : 1)
-						    : state.length_limit;
+				int limit = state->fixed_width
+						    ? state->fixed_width * (state->output ? state->output->scale : 1)
+						    : state->length_limit;
 				if (all_key_len > limit) {
-					key = state.keys;
+					key = state->keys;
 					struct wsk_keypress *next = key->next;
 					free(key);
-					state.keys = next;
-					set_dirty(&state);
+					state->keys = next;
+					set_dirty(state);
 				}
 			}
 		}
 
 		if ((pollfds[0].revents & POLLIN)) {
-			if (libinput_dispatch(state.libinput) != 0) {
+			if (libinput_dispatch(state->libinput) != 0) {
 				fprintf(stderr, "libinput_dispatch: %s\n", strerror(errno));
 				break;
 			}
 			struct libinput_event *event;
-			while ((event = libinput_get_event(state.libinput))) {
-				if (!state.paused) {
-					handle_libinput_event(&state, event);
+			while ((event = libinput_get_event(state->libinput))) {
+				if (!state->paused) {
+					handle_libinput_event(state, event);
 				}
 				libinput_event_destroy(event);
 				WSK_TRACE("libinput event processed");
 			}
 		}
 
-		if (!state.paused) {
+		if (!state->paused) {
 			/* Synthetic repeat for held key (libinput drops kernel auto-repeat) */
-			if (state.key_held && state.prev_combination_key[0] != '\0') {
+			if (state->key_held && state->prev_combination_key[0] != '\0') {
 				struct timespec now;
 				clock_gettime(CLOCK_MONOTONIC, &now);
-				long elapsed_ms = (now.tv_sec - state.last_key.tv_sec) * 1000L +
-						  (now.tv_nsec - state.last_key.tv_nsec) / 1000000L;
+				long elapsed_ms = (now.tv_sec - state->last_key.tv_sec) * 1000L +
+						  (now.tv_nsec - state->last_key.tv_nsec) / 1000000L;
 
 				if (elapsed_ms >= REPEAT_DELAY) {
-					if (state.repeat_state == 0) {
-						state.repeat_state = 1;
-						state.last_repeat_time = now;
+					if (state->repeat_state == 0) {
+						state->repeat_state = 1;
+						state->last_repeat_time = now;
 					}
-					if (state.repeat_state == 1) {
+					if (state->repeat_state == 1) {
 						/* First repeat after delay */
-						state.repeat_state = 2;
-						state.last_repeat_time = now;
-						generate_held_key_repeat(&state);
-					} else if (state.repeat_state == 2) {
+						state->repeat_state = 2;
+						state->last_repeat_time = now;
+						generate_held_key_repeat(state);
+					} else if (state->repeat_state == 2) {
 						long repeat_elapsed =
-							(now.tv_sec - state.last_repeat_time.tv_sec) * 1000L +
-							(now.tv_nsec - state.last_repeat_time.tv_nsec) / 1000000L;
+							(now.tv_sec - state->last_repeat_time.tv_sec) * 1000L +
+							(now.tv_nsec - state->last_repeat_time.tv_nsec) / 1000000L;
 						if (repeat_elapsed >= REPEAT_RATE) {
-							state.last_repeat_time = now;
-							generate_held_key_repeat(&state);
+							state->last_repeat_time = now;
+							generate_held_key_repeat(state);
 						}
 					}
 				}
@@ -2071,7 +2037,7 @@ int main(int argc, char *argv[]) {
 		}
 
 		if ((pollfds[1].revents & POLLIN)) {
-			int ret_dispatch = wl_display_dispatch(state.display);
+			int ret_dispatch = wl_display_dispatch(state->display);
 			WSK_TRACE("wl_display_dispatch returned %d", ret_dispatch);
 			if (ret_dispatch == -1) {
 				fprintf(stderr, "wl_display_dispatch: %s\n", strerror(errno));
@@ -2081,94 +2047,56 @@ int main(int argc, char *argv[]) {
 
 		/* Handle IPC socket connections (pause/resume signaling) */
 		if (npollfds == 3 && (pollfds[2].revents & POLLIN)) {
-			int client_fd = accept(state.sock_fd, nullptr, nullptr);
+			int client_fd = accept(state->sock_fd, nullptr, nullptr);
 			if (client_fd >= 0) {
 				char cmd = 0;
 				ssize_t _nr = read(client_fd, &cmd, 1);
 				if (_nr == 1) {
 					if (cmd == 'P') {
-						clear_full_keylink(state.keys, &state);
-						reset_input_state(&state);
-						state.paused = true;
-						if (surface_is_configured(&state) && state.surface) {
-							render_frame(&state);
+						clear_full_keylink(state->keys, state);
+						reset_input_state(state);
+						state->paused = true;
+						if (surface_is_configured(state) && state->surface) {
+							render_frame(state);
 						}
 					} else if (cmd == 'R') {
 						// Recreate xkb_state to clear any stale modifier state
 						// from events dropped during pause
-						xkb_state_unref(state.xkb_state);
-						state.xkb_state = xkb_state_new(state.xkb_keymap);
-						if (!state.xkb_state) {
+						xkb_state_unref(state->xkb_state);
+						state->xkb_state = xkb_state_new(state->xkb_keymap);
+						if (!state->xkb_state) {
 							fprintf(stderr, "Failed to recreate xkb_state on resume\n");
 						}
-						state.paused = false;
+						state->paused = false;
 					} else if (cmd == 'O') {
-						char argbuf[16] = {0};
-						size_t argpos = 0;
-						while (argpos < sizeof(argbuf) - 1) {
-							ssize_t nr = read(client_fd, &argbuf[argpos], 1);
-							if (nr <= 0)
-								break;
-							if (argbuf[argpos] == '\0')
-								break;
-							argpos++;
-						}
+						char argbuf[16];
+						read_ipc_string(client_fd, argbuf, sizeof(argbuf));
 						if (argbuf[0] == '\0') {
 							char resp[32];
-							int len = snprintf(resp, sizeof(resp), "%g", state.opacity);
+							int len = snprintf(resp, sizeof(resp), "%g", state->opacity);
 							write(client_fd, resp, len);
 						} else if (argbuf[0] == '+') {
-							state.opacity += strtof(argbuf + 1, nullptr);
-							if (state.opacity > 1.0f)
-								state.opacity = 1.0f;
-							if (state.opacity < 0.01f)
-								state.opacity = 0.01f;
-							char resp[32];
-							int len = snprintf(resp, sizeof(resp), "%g", state.opacity);
-							write(client_fd, resp, len);
-							if (surface_is_configured(&state) && state.surface)
-								render_frame(&state);
+							apply_opacity_and_reply(state, client_fd,
+										state->opacity +
+											strtof(argbuf + 1, nullptr));
 						} else if (argbuf[0] == '-') {
-							state.opacity -= strtof(argbuf + 1, nullptr);
-							if (state.opacity > 1.0f)
-								state.opacity = 1.0f;
-							if (state.opacity < 0.01f)
-								state.opacity = 0.01f;
-							char resp[32];
-							int len = snprintf(resp, sizeof(resp), "%g", state.opacity);
-							write(client_fd, resp, len);
-							if (surface_is_configured(&state) && state.surface)
-								render_frame(&state);
+							apply_opacity_and_reply(state, client_fd,
+										state->opacity -
+											strtof(argbuf + 1, nullptr));
 						} else {
-							state.opacity = strtof(argbuf, nullptr);
-							if (state.opacity > 1.0f)
-								state.opacity = 1.0f;
-							if (state.opacity < 0.01f)
-								state.opacity = 0.01f;
-							char resp[32];
-							int len = snprintf(resp, sizeof(resp), "%g", state.opacity);
-							write(client_fd, resp, len);
-							if (surface_is_configured(&state) && state.surface)
-								render_frame(&state);
+							apply_opacity_and_reply(state, client_fd,
+										strtof(argbuf, nullptr));
 						}
 					} else if (cmd == 'K') {
 						config_free();
 						config_load();
 					} else if (cmd == 'M') {
-						char argbuf[256] = {0};
-						size_t argpos = 0;
-						while (argpos < sizeof(argbuf) - 1) {
-							ssize_t nr = read(client_fd, &argbuf[argpos], 1);
-							if (nr <= 0)
-								break;
-							if (argbuf[argpos] == '\0')
-								break;
-							argpos++;
-						}
+						char argbuf[256];
+						read_ipc_string(client_fd, argbuf, sizeof(argbuf));
 						int32_t gx = 0, gy = 0;
 						if (sscanf(argbuf, "%d,%d", &gx, &gy) >= 2) {
-							reposition_surface(&state, gx, gy, 0, 0);
-							set_dirty(&state);
+							reposition_surface(state, gx, gy, 0, 0);
+							set_dirty(state);
 						}
 					}
 				}
@@ -2176,29 +2104,31 @@ int main(int argc, char *argv[]) {
 			}
 		}
 
-		if (!state.paused) {
-			WSK_TRACE("pre-render dirty=%d configured=%d keys=%p", state.dirty,
-				  surface_is_configured(&state), (void *) state.keys);
-			if (state.dirty) {
-				state.dirty = false;
-				if (surface_is_configured(&state) && state.surface) {
-					render_frame(&state);
+		if (!state->paused) {
+			WSK_TRACE("pre-render dirty=%d configured=%d keys=%p", state->dirty,
+				  surface_is_configured(state), (void *) state->keys);
+			if (state->dirty) {
+				state->dirty = false;
+				if (surface_is_configured(state) && state->surface) {
+					render_frame(state);
 				}
 			}
 		}
 	}
+}
 
-	if (state.recording_cairo) {
-		cairo_destroy(state.recording_cairo);
+static void cleanup_state(struct wsk_state *state) {
+	if (state->recording_cairo) {
+		cairo_destroy(state->recording_cairo);
 	}
-	if (state.recording) {
-		cairo_surface_destroy(state.recording);
+	if (state->recording) {
+		cairo_surface_destroy(state->recording);
 	}
-	if (state.font_options) {
-		cairo_font_options_destroy(state.font_options);
+	if (state->font_options) {
+		cairo_font_options_destroy(state->font_options);
 	}
-	destroy_buffer(&state.buffer_pool[0]);
-	destroy_buffer(&state.buffer_pool[1]);
+	destroy_buffer(&state->buffer_pool[0]);
+	destroy_buffer(&state->buffer_pool[1]);
 	WSK_TRACE("shutting down");
 #ifdef WSK_DEBUG
 	if (trace_file) {
@@ -2206,10 +2136,10 @@ int main(int argc, char *argv[]) {
 	}
 #endif
 	config_free();
-	free(state.repeat_font);
+	free(state->repeat_font);
 
 	/* Wayland / XKB / linked-list cleanup */
-	struct wsk_output *wsk_out = state.outputs;
+	struct wsk_output *wsk_out = state->outputs;
 	while (wsk_out) {
 		struct wsk_output *next = wsk_out->next;
 		if (wsk_out->xdg_output)
@@ -2218,27 +2148,85 @@ int main(int argc, char *argv[]) {
 		free(wsk_out);
 		wsk_out = next;
 	}
-	zwlr_layer_surface_v1_destroy(state.layer_surface);
-	if (state.layer_shell)
-		wl_proxy_destroy((struct wl_proxy *) state.layer_shell);
-	wl_surface_destroy(state.surface);
-	if (state.keyboard)
-		wl_keyboard_destroy(state.keyboard);
-	wl_proxy_destroy((struct wl_proxy *) state.seat);
-	wl_compositor_destroy(state.compositor);
-	wl_shm_destroy(state.shm);
-	if (state.output_mgr)
-		wl_proxy_destroy((struct wl_proxy *) state.output_mgr);
-	xkb_state_unref(state.xkb_state);
-	xkb_keymap_unref(state.xkb_keymap);
-	xkb_context_unref(state.xkb_context);
-exit:
-	if (state.sock_fd >= 0) {
-		close(state.sock_fd);
+	zwlr_layer_surface_v1_destroy(state->layer_surface);
+	if (state->layer_shell)
+		wl_proxy_destroy((struct wl_proxy *) state->layer_shell);
+	wl_surface_destroy(state->surface);
+	if (state->keyboard)
+		wl_keyboard_destroy(state->keyboard);
+	wl_proxy_destroy((struct wl_proxy *) state->seat);
+	wl_compositor_destroy(state->compositor);
+	wl_shm_destroy(state->shm);
+	if (state->output_mgr)
+		wl_proxy_destroy((struct wl_proxy *) state->output_mgr);
+	xkb_state_unref(state->xkb_state);
+	xkb_keymap_unref(state->xkb_keymap);
+	xkb_context_unref(state->xkb_context);
+	wl_display_disconnect(state->display);
+}
+
+static void cleanup_socket(struct wsk_state *state) {
+	if (state->sock_fd >= 0) {
+		close(state->sock_fd);
 	}
-	unlink(state.sock_path);
-	wl_display_disconnect(state.display);
-	libinput_unref(state.libinput);
-	devmgr_finish(state.devmgr, state.devmgr_pid);
+	unlink(state->sock_path);
+	libinput_unref(state->libinput);
+	devmgr_finish(state->devmgr, state->devmgr_pid);
+}
+
+int main(int argc, char *argv[]) {
+	struct wsk_state state = {0};
+	if (devmgr_start(&state.devmgr, &state.devmgr_pid, INPUTDEVPATH) > 0)
+		return 1;
+
+	int ret = 0;
+
+	bool want_pause = false;
+	bool want_resume = false;
+	bool want_reload = false;
+	bool want_opacity_query = false;
+	const char *opacity_arg = nullptr;
+
+	init_state_defaults(&state);
+	parse_options(&state, argc, argv, &want_pause, &want_resume, &want_reload, &want_opacity_query, &opacity_arg);
+
+	if (!setup_ipc_socket(&state, want_pause, want_resume, want_reload, want_opacity_query, opacity_arg)) {
+		ret = 1;
+		goto exit;
+	}
+
+	config_load();
+
+	state.repeat_font = scale_font_size(state.font, REPEAT_FONT_SCALE);
+
+	const char *mask_env = getenv("WIV_MASK");
+	if (mask_env) {
+		char *env_copy = strdup(mask_env);
+		if (env_copy) {
+			char *tok = strtok(env_copy, ",");
+			while (tok && state.mask.num_patterns < MASK_PATTERNS_MAX) {
+				strncpy(state.mask.patterns[state.mask.num_patterns], tok, 255);
+				state.mask.patterns[state.mask.num_patterns][255] = '\0';
+				state.mask.num_patterns++;
+				tok = strtok(nullptr, ",");
+			}
+			free(env_copy);
+		}
+	}
+
+	if (!setup_libinput(&state)) {
+		ret = 1;
+		goto exit;
+	}
+	if (!setup_wayland(&state)) {
+		ret = 1;
+		goto exit;
+	}
+
+	event_loop(&state);
+
+	cleanup_state(&state);
+exit:
+	cleanup_socket(&state);
 	return ret;
 }
