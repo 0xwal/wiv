@@ -1455,8 +1455,8 @@ static void init_state_defaults(struct wsk_state *state) {
 	state->sock_path[0] = '\0';
 }
 
-static bool parse_options(struct wsk_state *state, int argc, char *argv[], bool *want_pause, bool *want_resume,
-			  bool *want_reload, bool *want_opacity_query, const char **opacity_arg) {
+static void parse_and_init(struct wsk_state *state, int argc, char *argv[], bool *want_pause, bool *want_resume,
+			   bool *want_reload, bool *want_opacity_query, const char **opacity_arg) {
 	bool validate_config = false;
 	int c;
 	opterr = 0;
@@ -1638,8 +1638,6 @@ static bool parse_options(struct wsk_state *state, int argc, char *argv[], bool 
 			val = 1.0f;
 		state->opacity = val;
 	}
-
-	return true;
 }
 
 static bool setup_ipc_socket(struct wsk_state *state, bool want_pause, bool want_resume, bool want_reload,
@@ -2148,21 +2146,30 @@ static void cleanup_state(struct wsk_state *state) {
 		free(wsk_out);
 		wsk_out = next;
 	}
-	zwlr_layer_surface_v1_destroy(state->layer_surface);
+	if (state->layer_surface)
+		zwlr_layer_surface_v1_destroy(state->layer_surface);
 	if (state->layer_shell)
 		wl_proxy_destroy((struct wl_proxy *) state->layer_shell);
-	wl_surface_destroy(state->surface);
+	if (state->surface)
+		wl_surface_destroy(state->surface);
 	if (state->keyboard)
 		wl_keyboard_destroy(state->keyboard);
-	wl_proxy_destroy((struct wl_proxy *) state->seat);
-	wl_compositor_destroy(state->compositor);
-	wl_shm_destroy(state->shm);
+	if (state->seat)
+		wl_proxy_destroy((struct wl_proxy *) state->seat);
+	if (state->compositor)
+		wl_compositor_destroy(state->compositor);
+	if (state->shm)
+		wl_shm_destroy(state->shm);
 	if (state->output_mgr)
 		wl_proxy_destroy((struct wl_proxy *) state->output_mgr);
-	xkb_state_unref(state->xkb_state);
-	xkb_keymap_unref(state->xkb_keymap);
-	xkb_context_unref(state->xkb_context);
-	wl_display_disconnect(state->display);
+	if (state->xkb_state)
+		xkb_state_unref(state->xkb_state);
+	if (state->xkb_keymap)
+		xkb_keymap_unref(state->xkb_keymap);
+	if (state->xkb_context)
+		xkb_context_unref(state->xkb_context);
+	if (state->display)
+		wl_display_disconnect(state->display);
 }
 
 static void cleanup_socket(struct wsk_state *state) {
@@ -2170,7 +2177,8 @@ static void cleanup_socket(struct wsk_state *state) {
 		close(state->sock_fd);
 	}
 	unlink(state->sock_path);
-	libinput_unref(state->libinput);
+	if (state->libinput)
+		libinput_unref(state->libinput);
 	devmgr_finish(state->devmgr, state->devmgr_pid);
 }
 
@@ -2188,7 +2196,7 @@ int main(int argc, char *argv[]) {
 	const char *opacity_arg = nullptr;
 
 	init_state_defaults(&state);
-	parse_options(&state, argc, argv, &want_pause, &want_resume, &want_reload, &want_opacity_query, &opacity_arg);
+	parse_and_init(&state, argc, argv, &want_pause, &want_resume, &want_reload, &want_opacity_query, &opacity_arg);
 
 	if (!setup_ipc_socket(&state, want_pause, want_resume, want_reload, want_opacity_query, opacity_arg)) {
 		ret = 1;
@@ -2215,10 +2223,12 @@ int main(int argc, char *argv[]) {
 	}
 
 	if (!setup_libinput(&state)) {
+		cleanup_state(&state);
 		ret = 1;
 		goto exit;
 	}
 	if (!setup_wayland(&state)) {
+		cleanup_state(&state);
 		ret = 1;
 		goto exit;
 	}
