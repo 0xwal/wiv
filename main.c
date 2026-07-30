@@ -35,6 +35,7 @@ static const size_t COLOR_POOL_COUNT = sizeof(COLOR_POOL) / sizeof(COLOR_POOL[0]
 #define IPC_CMD_OPACITY 'O'
 #define IPC_CMD_RELOAD 'K'
 #define IPC_CMD_MOVE 'M'
+#define IPC_CMD_POOL 'p'
 
 static bool pool_enabled = false;
 static const char *runtime_pool[MAX_POOL_COLORS];
@@ -255,6 +256,24 @@ static cairo_subpixel_order_t to_cairo_subpixel_order(enum wl_output_subpixel su
 
 
 static uint32_t parse_color(const char *color);
+
+static void apply_pool_colors(const char *colors) {
+	free(pool_input_buf);
+	runtime_pool_count = 0;
+	if (colors) {
+		pool_input_buf = strdup(colors);
+		char *token = strtok(pool_input_buf, ",");
+		while (token && runtime_pool_count < MAX_POOL_COLORS) {
+			runtime_pool[runtime_pool_count++] = token;
+			token = strtok(nullptr, ",");
+		}
+	} else {
+		pool_input_buf = nullptr;
+		for (size_t i = 0; i < COLOR_POOL_COUNT && i < MAX_POOL_COLORS; i++)
+			runtime_pool[i] = COLOR_POOL[i];
+		runtime_pool_count = COLOR_POOL_COUNT;
+	}
+}
 
 static inline uint32_t get_pool_color(size_t position, uint32_t fallback) {
 	if (!pool_enabled || runtime_pool_count == 0)
@@ -1456,7 +1475,8 @@ static void init_state_defaults(struct wsk_state *state) {
 }
 
 static void parse_and_init(struct wsk_state *state, int argc, char *argv[], bool *want_pause, bool *want_resume,
-			   bool *want_reload, bool *want_opacity_query, const char **opacity_arg) {
+			   bool *want_reload, bool *want_opacity_query, const char **opacity_arg,
+			   bool *want_pool, const char **pool_data) {
 	bool validate_config = false;
 	int c;
 	opterr = 0;
@@ -1547,19 +1567,9 @@ static void parse_and_init(struct wsk_state *state, int argc, char *argv[], bool
 				break;
 			case 'p':
 				pool_enabled = true;
-				if (optarg) {
-					pool_input_buf = strdup(optarg);
-					char *token = strtok(pool_input_buf, ",");
-					runtime_pool_count = 0;
-					while (token && runtime_pool_count < MAX_POOL_COLORS) {
-						runtime_pool[runtime_pool_count++] = token;
-						token = strtok(nullptr, ",");
-					}
-				} else {
-					for (size_t i = 0; i < COLOR_POOL_COUNT && i < MAX_POOL_COLORS; i++)
-						runtime_pool[i] = COLOR_POOL[i];
-					runtime_pool_count = COLOR_POOL_COUNT;
-				}
+				apply_pool_colors(optarg);
+				*want_pool = true;
+				*pool_data = optarg;
 				break;
 			case 'x':
 				state->repeat_threshold = (int) strtol(optarg, nullptr, 10);
@@ -1595,6 +1605,7 @@ static void parse_and_init(struct wsk_state *state, int argc, char *argv[], bool
 						"left|center|right]");
 				fprintf(stderr, "\n-c          validate keymap config and exit\n");
 				fprintf(stderr, "-K          reload keymap config\n");
+				fprintf(stderr, "-p[colors]  toggle (no arg) or set (with colors) the color pool\n");
 				fprintf(stderr, "-g X,Y[,WxH]  position overlay at absolute coordinates\n");
 				exit(1);
 		}
@@ -1641,7 +1652,8 @@ static void parse_and_init(struct wsk_state *state, int argc, char *argv[], bool
 }
 
 static bool setup_ipc_socket(struct wsk_state *state, bool want_pause, bool want_resume, bool want_reload,
-			     bool want_opacity_query, const char *opacity_arg) {
+			     bool want_opacity_query, const char *opacity_arg,
+			     bool want_pool, const char *pool_arg) {
 	char path_buf[256];
 	const char *path = get_sock_path(path_buf, sizeof(path_buf));
 	strncpy(state->sock_path, path, sizeof(state->sock_path) - 1);
@@ -1734,7 +1746,19 @@ static bool setup_ipc_socket(struct wsk_state *state, bool want_pause, bool want
 				close(state->sock_fd);
 				exit(0);
 			}
-			fprintf(stderr, "wiv: already running, use one of flags -P -R -O -K -g, -h for help\n");
+			if (want_pool) {
+				char cmd = IPC_CMD_POOL;
+				write(conn_fd, &cmd, 1);
+				if (pool_arg) {
+					write(conn_fd, pool_arg, strlen(pool_arg));
+				}
+				char term = '\0';
+				write(conn_fd, &term, 1);
+				close(conn_fd);
+				close(state->sock_fd);
+				exit(0);
+			}
+			fprintf(stderr, "wiv: already running, use one of flags -P -R -O -K -g -p, -h for help\n");
 			close(conn_fd);
 			close(state->sock_fd);
 			state->sock_fd = -1;
@@ -2096,6 +2120,20 @@ static void event_loop(struct wsk_state *state) {
 							reposition_surface(state, gx, gy, 0, 0);
 							set_dirty(state);
 						}
+					} else if (cmd == IPC_CMD_POOL) {
+						char argbuf[256];
+						read_ipc_string(client_fd, argbuf, sizeof(argbuf));
+						if (argbuf[0] == '\0') {
+							pool_enabled = !pool_enabled;
+							if (pool_enabled)
+								apply_pool_colors(nullptr);
+						} else {
+							apply_pool_colors(argbuf);
+							pool_enabled = true;
+						}
+						if (surface_is_configured(state) && state->surface) {
+							render_frame(state);
+						}
 					}
 				}
 				close(client_fd);
@@ -2194,11 +2232,15 @@ int main(int argc, char *argv[]) {
 	bool want_reload = false;
 	bool want_opacity_query = false;
 	const char *opacity_arg = nullptr;
+	bool want_pool = false;
+	const char *pool_data = nullptr;
 
 	init_state_defaults(&state);
-	parse_and_init(&state, argc, argv, &want_pause, &want_resume, &want_reload, &want_opacity_query, &opacity_arg);
+	parse_and_init(&state, argc, argv, &want_pause, &want_resume, &want_reload, &want_opacity_query, &opacity_arg,
+		       &want_pool, &pool_data);
 
-	if (!setup_ipc_socket(&state, want_pause, want_resume, want_reload, want_opacity_query, opacity_arg)) {
+	if (!setup_ipc_socket(&state, want_pause, want_resume, want_reload, want_opacity_query, opacity_arg,
+			     want_pool, pool_data)) {
 		ret = 1;
 		goto exit;
 	}

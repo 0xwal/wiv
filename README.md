@@ -87,10 +87,12 @@ wiv [-b|-f|-s|-r #RRGGBB[AA]] [-F font] [-t timeout]
   - `wiv -O"-.1"` — decrement opacity by 10%
 - *-c*: validate keymap config file and exit (prints `OK` or error with line number)
 - *-K*: reload keymap config from file (sends reload signal to running instance)
-- *-p[colors]*: enable color pool. Without a value, uses the default pool from `keymap.h`.
-  With a value, overrides the pool with a comma-separated list of hex colors
-  (e.g. `-p"#ff0000,#00ff00,#0000ffAA"`). Keys without a per-key color use pool
-  colors in display order, wrapping when the pool is exhausted.
+- *-p[colors]*: toggle or set the color pool. Without a value, toggles the pool
+  on/off (enabling uses the default pool from `keymap.h`). With a value, enables
+  the pool with a comma-separated list of hex colors
+  (e.g. `-p"#ff0000,#00ff00,#0000ffAA"`). When used as a second instance, sends
+  the toggle/set command to the running instance via IPC. Keys without a per-key
+  color use pool colors in display order, wrapping when the pool is exhausted.
 - *-g X,Y[,WxH]*: position overlay at absolute coordinates (slurp-compatible).
   Accepts `X,Y` or `X,Y,WxH` (where `x` or `X` separates width from height).
   Spaces are normalized to commas, so slurp output (`X,Y WxH`) works directly.
@@ -135,7 +137,9 @@ constexpr bool POOL_OVERRIDES_FG = false;
 
 Colors are assigned by display position — key #0 gets pool[0], key #1 gets
 pool[1], wrapping around. At runtime, `-p"#RRGGBBAA,#RRGGBB"` overrides the
-compile-time pool without rebuilding.
+compile-time pool without rebuilding. Run `wiv -p` (no value) on a second
+instance to toggle the pool on/off, or `wiv -p"#RRGGBB,#RRGGBB"` to set pool
+colors on the running instance via IPC.
 
 **IPC Move:**
 A second instance can reposition a running overlay using `-g`. When wiv
