@@ -1638,6 +1638,10 @@ static void parse_and_init(struct wsk_state *state, int argc, char *argv[], bool
 		exit(config_validate() == 0 ? 0 : 1);
 	}
 
+	if (!pool_enabled) {
+		apply_pool_colors(nullptr);
+	}
+
 	if (state->fixed_width != 0 && state->target_slurp_w == 0)
 		state->fixed_width = compute_fixed_width(state);
 
@@ -2125,8 +2129,6 @@ static void event_loop(struct wsk_state *state) {
 						read_ipc_string(client_fd, argbuf, sizeof(argbuf));
 						if (argbuf[0] == '\0') {
 							pool_enabled = !pool_enabled;
-							if (pool_enabled)
-								apply_pool_colors(nullptr);
 						} else {
 							apply_pool_colors(argbuf);
 							pool_enabled = true;
